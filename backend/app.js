@@ -1,3 +1,5 @@
+// El .env vive en la raíz del monorepo; `npm run back:dev` corre desde backend/, así que se carga por ruta.
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 require('dotenv').config();
 const express = require('express');
 const app = express();
@@ -43,6 +45,8 @@ app.use('/invites', require('./routers/invites.router'));
 app.use('/cash', require('./routers/cash.router'));
 app.use('/billing', require('./routers/billing.router'));
 app.use('/platform', require('./routers/platform.router'));
+app.use('/partner', require('./routers/partner.router'));
+app.use('/support', require('./routers/support.router'));
 
 if (!process.env.VERCEL) {
   server.listen(process.env.PORT, () => {

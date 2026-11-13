@@ -6,7 +6,8 @@ const jwtCreator = require('../utils/jwt.utils');
 const db = require('../database/mongodb');
 const { createTenantDoc, newResetToken, ROLES } = require('../models/tenant.model');
 const { sendPasswordResetEmail } = require('../utils/mail.utils');
-const { normalizeRole } = require('../models/roles');
+const { normalizeRole, isOutsideTenant } = require('../models/roles');
+const referrals = require('../services/referral.service');
 
 const CreateUser = async (req, res) => {
   try {
@@ -21,15 +22,26 @@ const CreateUser = async (req, res) => {
       return res.status(400).send('Usuario con el correo ya registrado');
     }
 
-    const tenant = await db.CreateTenant(
-      createTenantDoc(value.businessName || `${value.name} ${value.lastName}`)
-    );
+    // El código de vendedor se valida antes de crear nada: uno inválido no debe dejar un negocio a medias
+    let referrer = null;
+    try {
+      referrer = await referrals.resolveForSignup(value.referralCode, { email: value.email });
+    } catch (err) {
+      if (err instanceof referrals.ReferralError) return res.status(err.status).send(err.message);
+      throw err;
+    }
+
+    const tenant = await db.CreateTenant({
+      ...createTenantDoc(value.businessName || `${value.name} ${value.lastName}`),
+      ...(referrer ? referrals.referralFields(referrer) : {}),
+    });
     const tenantId = tenant.id;
 
     value.password = await hasher.hashPassword(value.password);
     value.role = 'admin';
     value.tenantId = tenantId;
     delete value.businessName;
+    delete value.referralCode;
 
     await service.CreateUser(value);
 
@@ -65,6 +77,17 @@ const CreateUser = async (req, res) => {
   }
 };
 
+/** Pública: el registro la usa para decir «código válido» antes de enviar el formulario. */
+const CheckReferralCode = async (req, res) => {
+  try {
+    const ref = await referrals.findActiveByCode(req.params.code);
+    return res.status(200).json(ref ? { valid: true, code: ref.code, seller: ref.name } : { valid: false });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('No pude revisar el código.');
+  }
+};
+
 const FindUserByEmail = async (req, res) => {
   try {
     const search = await service.FindUserByEmail(req.body.email);
@@ -82,10 +105,12 @@ const LoginUsuario = async (req, res, next) => {
       const compare = await hasher.checkPassword(req.body.password, search.password);
       if (compare) {
         const role = normalizeRole(search.role);
-        const isPlatform = role === 'platform_admin';
-        if (!isPlatform && !search.tenantId) {
+        if (search.disabled) return res.status(403).send('Esta cuenta está desactivada.');
+        if (!isOutsideTenant(role) && !search.tenantId) {
           return res.status(403).send('Usuario sin tenant asignado');
         }
+        // Para "última vez visto" en la plataforma; un fallo aquí nunca debe impedir entrar
+        db.UpdateUserById(search._id, { lastLoginAt: new Date() }).catch(() => {});
         const token = jwtCreator.generateJWT({
           userId: search.username,
           userRole: role,
@@ -232,6 +257,7 @@ const Me = async (req, res) => {
 
 module.exports = {
   CreateUser,
+  CheckReferralCode,
   FindUserByEmail,
   LoginUsuario,
   FindUserByUsername,

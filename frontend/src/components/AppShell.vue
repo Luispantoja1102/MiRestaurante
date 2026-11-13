@@ -174,6 +174,7 @@ const allMore = [
   { to: "/staff", name: "staff", label: "Personal / Meseros" },
   { to: "/billing", name: "billing", label: "Facturación / Planes" },
   { to: "/settings", name: "settings", label: "Configuración" },
+  { to: "/support", name: "support", label: "Soporte" },
 ];
 
 // En café "Pedido" no existe (se vende en el Mostrador): esa pantalla es solo el menú del admin

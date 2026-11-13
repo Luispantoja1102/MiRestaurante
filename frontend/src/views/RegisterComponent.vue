@@ -62,6 +62,11 @@
           <span v-if="differentsPassword" class="error-inline">Las contraseñas no coinciden</span>
         </label>
 
+        <label class="field">
+          <span>Código de vendedor (opcional)</span>
+          <input v-model="referralCode" type="text" maxlength="20" placeholder="MR-XXXXXX" autocomplete="off" />
+        </label>
+
         <button type="submit" class="btn-primary">Registrar</button>
 
         <router-link
@@ -92,6 +97,8 @@ export default {
       username: "",
       email: "",
       password: "",
+      // Llega rellenado si el vendedor compartió su enlace (/register?ref=MR-XXXXXX)
+      referralCode: String(this.$route?.query?.ref || "").slice(0, 20),
       formatCellphoneError: false,
       confirmPassword: "",
       differentsPassword: false,
@@ -154,6 +161,7 @@ export default {
           username: this.username,
           password: this.password,
           cellphone: num,
+          ...(this.referralCode.trim() ? { referralCode: this.referralCode.trim() } : {}),
         });
         setSession({
           token: request.token,

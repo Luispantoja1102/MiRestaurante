@@ -1,5 +1,13 @@
 import { reactive } from "vue";
-import { normalizeRole, roleHome, routeRoles, homeForRole as homeFor, canAccessScreen, currentMode } from "./roles";
+import {
+  normalizeRole,
+  roleHome,
+  routeRoles,
+  homeForRole as homeFor,
+  canAccessScreen,
+  currentMode,
+  OUTSIDE_TENANT_ROLE_IDS,
+} from "./roles";
 
 const STORAGE_KEY = "mirestaurante_auth";
 
@@ -57,6 +65,16 @@ export function hasRole(...roles) {
 
 export function isPlatformAdmin() {
   return authStore.role === "platform_admin";
+}
+
+/** Admin o soporte de la plataforma. */
+export function isPlatformStaff() {
+  return authStore.role === "platform_admin" || authStore.role === "platform_support";
+}
+
+/** Plataforma o socios: no pertenecen a ningún negocio, así que no hay ajustes de negocio que cargar. */
+export function isOutsideTenant() {
+  return OUTSIDE_TENANT_ROLE_IDS.includes(authStore.role);
 }
 
 // La tabla de roles y pantallas vive en ./roles.js

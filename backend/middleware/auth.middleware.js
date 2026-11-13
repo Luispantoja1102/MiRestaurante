@@ -4,7 +4,7 @@ const {
   TENANT_ROLES,
   isSubscriptionActive,
 } = require('../models/tenant.model');
-const { normalizeRole } = require('../models/roles');
+const { normalizeRole, isPlatformStaff, isOutsideTenant } = require('../models/roles');
 const db = require('../database/mongodb');
 
 function requireAuth(req, res, next) {
@@ -14,9 +14,7 @@ function requireAuth(req, res, next) {
   }
 
   const role = normalizeRole(payload.userRole);
-  const isPlatform = role === 'platform_admin';
-
-  if (!isPlatform && !payload.tenantId) {
+  if (!isOutsideTenant(role) && !payload.tenantId) {
     return res.status(401).send('No autorizado');
   }
 
@@ -64,7 +62,7 @@ function requireFreshRole(...allowed) {
 
 async function requireActiveSubscription(req, res, next) {
   try {
-    if (req.user?.role === 'platform_admin') return next();
+    if (isPlatformStaff(req.user?.role)) return next();
     if (!req.tenantId) {
       return res.status(403).json({
         code: 'SUBSCRIPTION_REQUIRED',

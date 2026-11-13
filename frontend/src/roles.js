@@ -45,7 +45,20 @@ export const ROLE_DEFS = [
   },
 ];
 
-const PLATFORM_ROLE = { id: "platform_admin", label: "Plataforma", home: "platform" };
+const PLATFORM_ROLES = [
+  { id: "platform_admin", label: "Plataforma", home: "platform" },
+  { id: "platform_support", label: "Soporte", home: "platform" },
+];
+export const PLATFORM_ROLE_IDS = PLATFORM_ROLES.map((r) => r.id);
+
+// Socios (vendedores): el dueño del socio y su equipo. Entran a su propio portal, no a un negocio.
+const PARTNER_ROLES = [
+  { id: "partner_admin", label: "Socio (dueño)", home: "partner" },
+  { id: "partner_staff", label: "Socio (asesor)", home: "partner" },
+];
+export const PARTNER_ROLE_IDS = PARTNER_ROLES.map((r) => r.id);
+/** Cuentas que no pertenecen a ningún negocio: plataforma y socios. */
+export const OUTSIDE_TENANT_ROLE_IDS = [...PLATFORM_ROLE_IDS, ...PARTNER_ROLE_IDS];
 
 /** Nombres antiguos que pueden seguir en sesiones guardadas o datos viejos. */
 export const LEGACY_ROLE_ALIASES = { hosstess: "host" };
@@ -107,18 +120,20 @@ export const SCREENS = [
   { name: "inventory", path: "/inventory", label: "Inventario", roles: ["admin"], modes: BOTH },
   { name: "billing", path: "/billing", label: "Facturación y planes", roles: ["admin", "cashier"], modes: BOTH },
   { name: "settings", path: "/settings", label: "Configuración", roles: ["admin"], modes: BOTH },
+  { name: "support", path: "/support", label: "Soporte", roles: ["admin"], modes: BOTH },
   { name: "setup", path: "/setup", label: "Configuración inicial", roles: ["admin"], modes: BOTH },
   { name: "printOrder", path: "/print/order/:id", label: "Cuenta", roles: ["admin", "cashier", "waiter", "kitchen"], modes: BOTH },
   { name: "printCash", path: "/print/cash/:id", label: "Cierre de caja", roles: ["admin", "cashier"], modes: BOTH },
-  { name: "platform", path: "/platform", label: "Plataforma", roles: ["platform_admin"], modes: BOTH },
+  { name: "platform", path: "/platform", label: "Plataforma", roles: PLATFORM_ROLE_IDS, modes: BOTH },
+  { name: "partner", path: "/partner", label: "Portal de socios", roles: PARTNER_ROLE_IDS, modes: BOTH },
 ];
 
 export const roleLabel = Object.fromEntries(
-  [...ROLE_DEFS, PLATFORM_ROLE].map((r) => [r.id, r.label])
+  [...ROLE_DEFS, ...PLATFORM_ROLES, ...PARTNER_ROLES].map((r) => [r.id, r.label])
 );
 
 export const roleHome = Object.fromEntries(
-  [...ROLE_DEFS, PLATFORM_ROLE].map((r) => [r.id, r.home])
+  [...ROLE_DEFS, ...PLATFORM_ROLES, ...PARTNER_ROLES].map((r) => [r.id, r.home])
 );
 
 export const routeRoles = Object.fromEntries(SCREENS.map((s) => [s.name, s.roles]));
@@ -144,7 +159,7 @@ export function canAccessScreen(name, role, mode = "table") {
 /** Pantalla de inicio de un rol. En modo mostrador todos entran directo a vender. */
 export function homeForRole(role, mode = "table") {
   const r = normalizeRole(role);
-  if (r === "platform_admin") return roleHome[r];
+  if (OUTSIDE_TENANT_ROLE_IDS.includes(r)) return roleHome[r];
   if (mode === "counter") return "counter";
   return roleHome[r] || "main";
 }

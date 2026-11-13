@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { MongoClient, ObjectId } = require('mongodb');
 const { createTenantDoc } = require('../models/tenant.model');
+const { PLATFORM_ROLES } = require('../models/roles');
 
 const _url = process.env.DATABASE_URI || 'mongodb://127.0.0.1:27017';
 const _dbName = process.env.DATABASE_NAME || 'mirestaurante';
@@ -38,6 +39,7 @@ async function ensureConnection() {
       await migrateLegacyTenant();
       await migrateLegacyRoles();
       await ensureIndexes();
+      await ensurePlatformAdmin();
       connected = true;
       console.log(`MongoDB connected → ${_dbName}`);
     })().finally(() => {
@@ -45,6 +47,39 @@ async function ensureConnection() {
     });
   }
   await connecting;
+}
+
+// Primer arranque: crea el platform_admin definido en .env (PLATFORM_ADMIN_*) si aún no existe ninguno.
+// Nunca pisa una cuenta existente (para restablecer la contraseña: npm run seed:platform-admin).
+async function ensurePlatformAdmin() {
+  const email = (process.env.PLATFORM_ADMIN_EMAIL || '').trim().toLowerCase();
+  const username = (process.env.PLATFORM_ADMIN_USERNAME || '').trim();
+  const password = process.env.PLATFORM_ADMIN_PASSWORD || '';
+  if (!email || !username || !password) return;
+  try {
+    const users = dbConnection.collection('users');
+    if (await users.findOne({ role: 'platform_admin' })) return;
+    if (await users.findOne({ $or: [{ email }, { username }] })) {
+      console.warn(`[seed] platform admin no creado: ya existe un usuario con ese correo o usuario (${username})`);
+      return;
+    }
+    const now = new Date();
+    await users.insertOne({
+      name: 'MiRestaurante',
+      lastName: 'Platform',
+      email,
+      username,
+      password: await require('../utils/bcrypt.utils').hashPassword(password),
+      cellphone: '0000000000',
+      role: 'platform_admin',
+      tenantId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    console.log(`[seed] platform admin creado: ${username} / ${email}`);
+  } catch (err) {
+    console.error('[seed] no se pudo crear el platform admin:', err.message);
+  }
 }
 
 // Índices que el código necesita para ser correcto (no solo rápido). Idempotente: si ya existen no hace nada.
@@ -55,8 +90,10 @@ async function ensureIndexes() {
       { tenantId: 1, clientRef: 1 },
       { unique: true, partialFilterExpression: { clientRef: { $type: 'string' } } }
     );
+    await dbConnection.collection('support_tickets').createIndex({ tenantId: 1, updatedAt: -1 });
+    await dbConnection.collection('support_tickets').createIndex({ status: 1, updatedAt: -1 });
   } catch (err) {
-    console.error('[db] no se pudo crear el índice de orders:', err.message);
+    console.error('[db] no se pudo crear un índice:', err.message);
   }
 }
 
@@ -214,6 +251,148 @@ async function DeleteUserByIdAndTenant(id, tenantId) {
     .collection('users')
     .deleteOne({ _id: new ObjectId(id), tenantId: String(tenantId) });
 }
+// ——— Plataforma (lecturas por lote, equipo y bitácora) ———
+async function GetSettingsMany(tenantIds) {
+  const ids = (tenantIds || []).map(String);
+  if (!ids.length) return new Map();
+  const rows = await dbConnection.collection('settings').find({ tenantId: { $in: ids } }).toArray();
+  return new Map(rows.map((row) => [String(row.tenantId), row]));
+}
+async function ListUsersByTenants(tenantIds) {
+  const ids = (tenantIds || []).map(String);
+  const byTenant = new Map(ids.map((id) => [id, []]));
+  if (!ids.length) return byTenant;
+  const rows = await dbConnection
+    .collection('users')
+    .find({ tenantId: { $in: ids } }, { projection: USER_PUBLIC_FIELDS })
+    .sort({ createdAt: 1 })
+    .toArray();
+  for (const row of rows) byTenant.get(String(row.tenantId)).push({ ...row, id: String(row._id) });
+  return byTenant;
+}
+async function ListPlatformUsers() {
+  const rows = await dbConnection
+    .collection('users')
+    .find({ role: { $in: PLATFORM_ROLES } }, { projection: USER_PUBLIC_FIELDS })
+    .sort({ createdAt: 1 })
+    .toArray();
+  return rows.map((row) => ({ ...row, id: String(row._id) }));
+}
+async function CountPlatformAdmins() {
+  return dbConnection.collection('users').countDocuments({ role: 'platform_admin' });
+}
+async function DeleteUserById(id) {
+  if (!ObjectId.isValid(id)) return false;
+  const result = await dbConnection.collection('users').deleteOne({ _id: new ObjectId(id) });
+  return result.deletedCount > 0;
+}
+// Cuánto usa un negocio la plataforma (ficha del cliente)
+async function CountTenantUsage(tenantId) {
+  const tid = String(tenantId);
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const count = (name, extra = {}) => dbConnection.collection(name).countDocuments({ tenantId: tid, ...extra });
+  const [tables, foods, ingredients, orders30d] = await Promise.all([
+    count('mesas'),
+    count('foods'),
+    count('ingredients'),
+    count('orders', { createdAt: { $gte: since } }),
+  ]);
+  return { tables, foods, ingredients, orders30d };
+}
+// Cobros: un evento por pago recibido (hoy, los que registra el equipo a mano)
+async function CreateBillingEvent(data) {
+  const doc = { ...data, tenantId: String(data.tenantId), at: data.at || new Date() };
+  const result = await dbConnection.collection('billing_events').insertOne(doc);
+  return withId({ ...doc, _id: result.insertedId });
+}
+async function ListBillingEvents(tenantId, limit = 40) {
+  const rows = await dbConnection
+    .collection('billing_events')
+    .find({ tenantId: String(tenantId) })
+    .sort({ at: -1 })
+    .limit(limit)
+    .toArray();
+  return rows.map(withId);
+}
+async function ListPaymentsBetween(from, to) {
+  const rows = await dbConnection
+    .collection('billing_events')
+    .find({ type: 'payment', at: { $gte: from, $lte: to } })
+    .sort({ at: -1 })
+    .toArray();
+  return rows.map(withId);
+}
+async function CreatePlatformExpense(data) {
+  const result = await dbConnection.collection('platform_expenses').insertOne(data);
+  return withId({ ...data, _id: result.insertedId });
+}
+async function DeletePlatformExpense(id) {
+  if (!ObjectId.isValid(id)) return false;
+  const result = await dbConnection.collection('platform_expenses').deleteOne({ _id: new ObjectId(id) });
+  return result.deletedCount > 0;
+}
+// Gastos desde un mes («AAAA-MM») en adelante; las claves de mes ordenan bien como texto
+async function ListPlatformExpensesSince(month) {
+  const rows = await dbConnection
+    .collection('platform_expenses')
+    .find({ month: { $gte: month } })
+    .sort({ createdAt: -1 })
+    .toArray();
+  return rows.map(withId);
+}
+// ——— Soporte: un ticket por conversación, con sus mensajes dentro ———
+async function CreateSupportTicket(data) {
+  const result = await dbConnection.collection('support_tickets').insertOne(data);
+  return withId({ ...data, _id: result.insertedId });
+}
+async function GetSupportTicket(id) {
+  if (!ObjectId.isValid(id)) return null;
+  return withId(await dbConnection.collection('support_tickets').findOne({ _id: new ObjectId(id) }));
+}
+async function ListSupportTickets({ tenantId, status, limit = 300 } = {}) {
+  const filter = {};
+  if (tenantId) filter.tenantId = String(tenantId);
+  if (status) filter.status = status;
+  const rows = await dbConnection
+    .collection('support_tickets')
+    .find(filter)
+    .sort({ updatedAt: -1 })
+    .limit(Math.min(Math.max(Number(limit) || 300, 1), 1000))
+    .toArray();
+  return rows.map(withId);
+}
+/** Agrega un mensaje al ticket y cambia su estado en una sola operación (no se pierden mensajes si dos personas escriben a la vez). */
+async function AppendSupportMessage(id, message, patch = {}) {
+  if (!ObjectId.isValid(id)) return null;
+  const result = await dbConnection
+    .collection('support_tickets')
+    .findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $push: { messages: message }, $set: { ...patch, updatedAt: message.at } },
+      { returnDocument: 'after' }
+    );
+  const doc = result && Object.prototype.hasOwnProperty.call(result, 'value') ? result.value : result;
+  return withId(doc);
+}
+async function UpdateSupportTicket(id, patch) {
+  if (!ObjectId.isValid(id)) return null;
+  await dbConnection.collection('support_tickets').updateOne({ _id: new ObjectId(id) }, { $set: { ...patch, updatedAt: new Date() } });
+  return GetSupportTicket(id);
+}
+async function CreatePlatformAudit(data) {
+  await dbConnection.collection('platform_audit').insertOne(data);
+}
+async function ListPlatformAudit({ tenantId = null, limit = 60 } = {}) {
+  const filter = tenantId ? { tenantId: String(tenantId) } : {};
+  const rows = await dbConnection
+    .collection('platform_audit')
+    .find(filter)
+    .sort({ createdAt: -1 })
+    .limit(Math.min(Math.max(Number(limit) || 60, 1), 200))
+    .toArray();
+  return rows.map(withId);
+}
+
 async function FindUserByResetToken(token) {
   return await dbConnection.collection('users').findOne({
     resetToken: token,
@@ -609,14 +788,23 @@ async function UpdateCashSession(id, data, tenantId) {
   return GetCashSessionById(id, tenantId);
 }
 
+// Para los módulos de datos que viven aparte (referidos y socios)
+const getCollection = (name) => dbConnection.collection(name);
+
 module.exports = {
   ensureConnection,
+  getCollection,
   CreateTenant, GetTenantById, UpdateTenant, ListTenants, CountUsersByTenant, GetTenantByMpPreapprovalId,
   CreateUser, FindUserByEmail, LoginUsuario, FindUserByUsername, UpdateUserById, FindUserByResetToken,
   touchSync, GetSyncVersions,
   GetIngredients, GetIngredientById, CreateIngredient, UpdateIngredient, DeleteIngredient, CountFoodsUsingIngredient,
   AdjustStock, SetStock, GetStockMovements,
   GetUsersByTenant, GetUserByIdAndTenant, CountUsersByRole, DeleteUserByIdAndTenant,
+  GetSettingsMany, ListUsersByTenants, ListPlatformUsers, CountPlatformAdmins, DeleteUserById,
+  CreatePlatformAudit, ListPlatformAudit, CountTenantUsage,
+  CreateSupportTicket, GetSupportTicket, ListSupportTickets, AppendSupportMessage, UpdateSupportTicket,
+  CreateBillingEvent, ListBillingEvents, ListPaymentsBetween,
+  CreatePlatformExpense, DeletePlatformExpense, ListPlatformExpensesSince,
   AddMesa, UpdateStatusMesa, Getmesas, GetMesaFreeWaiter, GetMesaById, DeleteMesa, CloseMesas, GetNextMesaNumero,
   AddWaiter, GetWaiters, GetWaiterByCellphone, GetWaiterByDisponibility, DeleteWaiter, UpdateWaiter,
   AddWaitList, GetWaitList, GetWaitListByNumber, DeleteWaitList,

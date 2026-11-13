@@ -12,7 +12,7 @@ import {
   clearSession,
   homeForRole,
   isAuthenticated,
-  isPlatformAdmin,
+  isOutsideTenant,
 } from "./authStore";
 import "./apiService";
 import { screenRoles, setModeProvider } from "./roles";
@@ -38,6 +38,8 @@ import PrintOrderView from "./views/PrintOrderView.vue";
 import PrintCashCloseView from "./views/PrintCashCloseView.vue";
 import BillingView from "./views/BillingView.vue";
 import PlatformAdminView from "./views/PlatformAdminView.vue";
+import PartnerView from "./views/PartnerView.vue";
+import SupportView from "./views/SupportView.vue";
 import TeamView from "./views/TeamView.vue";
 
 const authMeta = (roles?: string[]) => ({
@@ -79,6 +81,18 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, roles: screenRoles("platform") },
   },
   {
+    path: "/support",
+    name: "support",
+    component: SupportView,
+    meta: { requiresAuth: true, roles: screenRoles("support") },
+  },
+  {
+    path: "/partner",
+    name: "partner",
+    component: PartnerView,
+    meta: { requiresAuth: true, roles: screenRoles("partner") },
+  },
+  {
     path: "/print/order/:id",
     name: "printOrder",
     component: PrintOrderView,
@@ -103,7 +117,7 @@ router.beforeEach(async (to) => {
   if (publicNames.has(String(to.name))) {
     if (isAuthenticated() && (to.name === "login" || to.name === "register")) {
       // La pantalla de inicio depende del modo del negocio (salón o mostrador): primero los ajustes
-      if (!venueStore.ready && !isPlatformAdmin()) await fetchVenueSettings();
+      if (!venueStore.ready && !isOutsideTenant()) await fetchVenueSettings();
       return { name: homeForRole() };
     }
     return true;
@@ -115,7 +129,7 @@ router.beforeEach(async (to) => {
 
   // El modo (salón o mostrador) sale de los ajustes del negocio: en un dispositivo nuevo hay que
   // traerlos ANTES de decidir a qué pantallas puede entrar esta sesión.
-  if (to.meta.roles && !venueStore.ready && !isPlatformAdmin()) {
+  if (to.meta.roles && !venueStore.ready && !isOutsideTenant()) {
     await fetchVenueSettings();
   }
 
@@ -123,7 +137,7 @@ router.beforeEach(async (to) => {
     return { name: homeForRole() };
   }
 
-  if (to.name === "setup" || to.name === "billing" || to.name === "platform") {
+  if (to.name === "setup" || to.name === "billing" || to.name === "platform" || to.name === "partner" || to.name === "support") {
     return true;
   }
 

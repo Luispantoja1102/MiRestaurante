@@ -8,7 +8,7 @@ corsOptions = {
   origin: domains,
   optionsSuccessStatus: 200,
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
 };
 
 module.exports = corsOptions;

@@ -71,16 +71,119 @@ function createFakeDb() {
     GetInviteByToken: async (token) => state.invites.find((i) => i.token === token) || null,
     UpdateInvite: async (id, data, t) => { const i = state.invites.find((x) => x.id === id && x.tenantId === t); if (!i) return null; Object.assign(i, data); return i; },
     DeleteWaiter: async (c, tenantId) => { state.waiters = state.waiters.filter((w) => !(w.cellphone === c && w.tenantId === tenantId)); return {}; },
+    // —— plataforma (mismas formas que database/mongodb.js)
+    ListTenants: async () => state.tenants,
+    CreateTenant: async (d) => { const t = { ...d, id: String(new ObjectId()) }; state.tenants.push(t); return t; },
+    UpdateTenant: async (id, patch) => { const t = state.tenants.find((x) => x.id === id); if (!t) return null; Object.assign(t, patch); return t; },
+    GetSettingsMany: async (ids) => new Map(ids.filter((id) => state.settings[id]).map((id) => [String(id), state.settings[id]])),
+    ListUsersByTenants: async (ids) => new Map(ids.map((id) => [String(id), state.users.filter((u) => u.tenantId === id).map(pub)])),
+    ListPlatformUsers: async () => state.users.filter((u) => ['platform_admin', 'platform_support'].includes(u.role)).map(pub),
+    CountPlatformAdmins: async () => state.users.filter((u) => u.role === 'platform_admin').length,
+    DeleteUserById: async (id) => { const n = state.users.length; state.users = state.users.filter((u) => String(u._id) !== String(id)); return state.users.length < n; },
+    CountTenantUsage: async () => ({ tables: 0, foods: 0, ingredients: 0, orders30d: 0 }),
+    CreateSupportTicket: async (d) => { const t = { ...d, id: String(new ObjectId()) }; (state.tickets ||= []).push(t); return t; },
+    GetSupportTicket: async (id) => (state.tickets || []).find((t) => t.id === String(id)) || null,
+    ListSupportTickets: async ({ tenantId, status } = {}) =>
+      (state.tickets || []).filter((t) => (!tenantId || t.tenantId === String(tenantId)) && (!status || t.status === status)).slice().sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)),
+    AppendSupportMessage: async (id, message, patch = {}) => { const t = (state.tickets || []).find((x) => x.id === String(id)); if (!t) return null; t.messages.push(message); Object.assign(t, patch, { updatedAt: message.at }); return t; },
+    UpdateSupportTicket: async (id, patch) => { const t = (state.tickets || []).find((x) => x.id === String(id)); if (!t) return null; Object.assign(t, patch, { updatedAt: new Date() }); return t; },
+    CreateBillingEvent: async (d) => { const e = { ...d, tenantId: String(d.tenantId), at: d.at || new Date(), id: String(new ObjectId()) }; (state.billing ||= []).push(e); return e; },
+    ListBillingEvents: async (t) => (state.billing || []).filter((e) => e.tenantId === String(t)).slice().reverse(),
+    ListPaymentsBetween: async (from, to) => (state.billing || []).filter((e) => e.type === 'payment' && e.at >= from && e.at <= to),
+    CreatePlatformExpense: async (d) => { const e = { ...d, id: String(new ObjectId()) }; (state.expenses ||= []).push(e); return e; },
+    DeletePlatformExpense: async (id) => { const n = (state.expenses || []).length; state.expenses = (state.expenses || []).filter((e) => e.id !== id); return state.expenses.length < n; },
+    ListPlatformExpensesSince: async (month) => (state.expenses || []).filter((e) => e.month >= month),
+    CreatePlatformAudit: async (d) => { (state.audit ||= []).push({ ...d, id: String((state.audit || []).length + 1) }); },
+    ListPlatformAudit: async ({ tenantId = null } = {}) => (state.audit || []).filter((a) => !tenantId || a.tenantId === String(tenantId)).slice().reverse(),
   };
   // Cualquier otra función de la base que se use por accidente falla de forma explícita.
   const db = new Proxy(impl, { get: (t, k) => (k in t ? t[k] : () => { throw new Error(`db.${String(k)} no está simulada en el test`); }) });
   return { db, state };
 }
 
+// Referidos y socios: mismas funciones que database/referral.db.js y database/partner.db.js, en memoria.
+function createFakeReferralDb(state) {
+  state.referrers ||= []; state.commissions ||= []; state.payouts ||= [];
+  const newId = () => String(new ObjectId());
+  const byId = (list, id) => list.find((x) => x.id === String(id)) || null;
+  const payingIds = (rid) => [...new Set(state.commissions.filter((c) => c.referrerId === String(rid) && c.status !== 'void').map((c) => c.tenantId))];
+  const impl = {
+    CreateReferrer: async (d) => { const r = { ...d, id: newId() }; state.referrers.push(r); return r; },
+    GetReferrerById: async (id) => byId(state.referrers, id),
+    GetReferrerByCode: async (code) => state.referrers.find((r) => r.code === String(code)) || null,
+    GetReferrerByEmail: async (email) => state.referrers.find((r) => r.email === String(email).toLowerCase()) || null,
+    GetReferrerByOwnerEmail: async (email) => state.referrers.find((r) => r.ownerEmail === String(email).toLowerCase()) || null,
+    ListReferrers: async () => state.referrers.slice().reverse(),
+    UpdateReferrer: async (id, patch) => { const r = byId(state.referrers, id); if (!r) return null; Object.assign(r, patch); return r; },
+    DeleteReferrer: async (id) => { state.referrers = state.referrers.filter((r) => r.id !== String(id)); },
+    ListTenantsByReferrer: async (rid) => state.tenants.filter((t) => t.referrerId === String(rid)),
+    ListReferredTenants: async () => state.tenants.filter((t) => t.referrerId),
+    InsertCommission: async (d) => { if (state.commissions.some((c) => c.key === d.key)) return null; const c = { ...d, id: newId() }; state.commissions.push(c); return c; },
+    GetCommission: async (id) => byId(state.commissions, id),
+    FindCommissionByKey: async (key) => state.commissions.find((c) => c.key === String(key)) || null,
+    ListCommissions: async ({ referrerId, tenantId, status } = {}) =>
+      state.commissions.filter((c) => (!referrerId || c.referrerId === String(referrerId)) && (!tenantId || c.tenantId === String(tenantId)) && (!status || c.status === status)).slice().reverse(),
+    UpdateCommission: async (id, patch, only) => { const c = byId(state.commissions, id); if (!c || (only && c.status !== only)) return null; Object.assign(c, patch); return c; },
+    ListPayingTenantIds: async (rid) => payingIds(rid),
+    CountClosedTenants: async (rid) => payingIds(rid).length,
+    SumCommissions: async () => {
+      const groups = new Map();
+      for (const c of state.commissions) {
+        const k = `${c.referrerId}|${c.status}`;
+        const g = groups.get(k) || { referrerId: c.referrerId, status: c.status, total: 0, count: 0 };
+        g.total += c.commission; g.count += 1; groups.set(k, g);
+      }
+      return [...groups.values()];
+    },
+    SumCommissionsByReferrerBetween: async (from, to) => {
+      const byRef = new Map();
+      for (const c of state.commissions.filter((x) => x.status !== 'void' && x.createdAt >= from && x.createdAt <= to)) {
+        const cur = byRef.get(c.referrerId) || { referrerId: c.referrerId, pending: 0, paid: 0, count: 0 };
+        if (c.status === 'paid') cur.paid += c.commission; else cur.pending += c.commission;
+        cur.count += 1; byRef.set(c.referrerId, cur);
+      }
+      return [...byRef.values()];
+    },
+    CreatePayout: async (d) => { const p = { ...d, id: String(d._id || newId()) }; state.payouts.push(p); return p; },
+    ListPayouts: async (rid) => state.payouts.filter((p) => p.referrerId === String(rid)).slice().reverse(),
+    MarkPendingPaid: async (rid, payoutId, paidAt) => {
+      const done = [];
+      for (const c of state.commissions.filter((x) => x.referrerId === String(rid) && x.status === 'pending')) { Object.assign(c, { status: 'paid', paidAt, payoutId: String(payoutId) }); done.push(c); }
+      return done;
+    },
+  };
+  return impl;
+}
+
+function createFakePartnerDb(state) {
+  state.notes ||= [];
+  const PARTNER = ['partner_admin', 'partner_staff'];
+  const mine = (pid) => state.users.filter((u) => u.partnerId === String(pid) && PARTNER.includes(u.role));
+  const pub = (u) => ({ id: String(u._id), name: u.name || '', lastName: u.lastName || '', username: u.username, email: u.email, cellphone: u.cellphone || '', role: u.role, disabled: Boolean(u.disabled), lastLoginAt: u.lastLoginAt || null, createdAt: u.createdAt || null });
+  return {
+    ListPartnerUsers: async (pid) => mine(pid).map(pub),
+    FindPartnerUser: async (id, pid) => mine(pid).find((u) => String(u._id) === String(id)) || null,
+    FindPartnerUserByUsername: async (username, pid) => mine(pid).find((u) => u.username === String(username)) || null,
+    CountActivePartnerAdmins: async (pid) => mine(pid).filter((u) => u.role === 'partner_admin' && !u.disabled).length,
+    GetPartnerTenant: async (tid, pid) => state.tenants.find((t) => t.id === String(tid) && t.referrerId === String(pid)) || null,
+    SetTenantAssignee: async (tid, pid, username) => { const t = state.tenants.find((x) => x.id === String(tid) && x.referrerId === String(pid)); if (!t) return false; t.partnerAssignee = username || null; return true; },
+    ClearAssignee: async (pid, username) => { state.tenants.filter((t) => t.referrerId === String(pid) && t.partnerAssignee === username).forEach((t) => { t.partnerAssignee = null; }); },
+    ListNotes: async (pid, tid) => state.notes.filter((n) => n.partnerId === String(pid) && n.tenantId === String(tid)).slice().reverse().map((n, i) => ({ id: String(i), text: n.text, author: n.author, authorName: n.authorName, createdAt: n.createdAt })),
+    CreateNote: async (d) => { state.notes.push(d); return { id: String(state.notes.length), text: d.text, author: d.author, authorName: d.authorName, createdAt: d.createdAt }; },
+    LastNotes: async (pid) => new Map(state.notes.filter((n) => n.partnerId === String(pid)).map((n) => [n.tenantId, n.createdAt])),
+  };
+}
+
 function loadApp() {
   const { db, state } = createFakeDb();
   const dbPath = require.resolve(path.join(__dirname, '..', 'database', 'mongodb.js'));
   require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: db };
+  const stub = (file, exports) => {
+    const p = require.resolve(path.join(__dirname, '..', 'database', file));
+    require.cache[p] = { id: p, filename: p, loaded: true, exports };
+  };
+  stub('referral.db.js', createFakeReferralDb(state));
+  stub('partner.db.js', createFakePartnerDb(state));
   const app = require('../app');
   const { generateJWT } = require('../utils/jwt.utils');
   const tokenFor = (username, role, tenantId = 't1') => 'Bearer ' + generateJWT({ userId: username, userRole: role, tenantId });

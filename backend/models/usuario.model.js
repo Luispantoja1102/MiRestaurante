@@ -13,6 +13,8 @@ const userSchema = Joi.object({
     .valid(...TENANT_ROLES)
     .default('admin'),
   businessName: Joi.string().optional().allow(''),
+  // Código del vendedor que lo refirió (MR-XXXXXX); opcional
+  referralCode: Joi.string().max(20).optional().allow(''),
 });
 
 module.exports = userSchema;

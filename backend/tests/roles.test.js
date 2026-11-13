@@ -16,7 +16,7 @@ test('cada rol del negocio tiene etiqueta, descripción y pantallas', () => {
   for (const r of ROLE_DEFS) {
     assert.ok(r.label && r.description && r.sees.length, `rol ${r.id} incompleto`);
   }
-  assert.deepEqual(ROLES, [...TENANT_ROLES, 'platform_admin']);
+  assert.deepEqual(ROLES, [...TENANT_ROLES, 'platform_admin', 'platform_support', 'partner_admin', 'partner_staff']);
 });
 
 test('el frontend y el backend definen exactamente los mismos roles', async () => {
@@ -30,7 +30,7 @@ test('el frontend y el backend definen exactamente los mismos roles', async () =
 
 test('todo rol cae en una pantalla a la que sí puede entrar, y esa pantalla existe', async () => {
   const front = await import(pathToFileURL(path.join(__dirname, '..', '..', 'frontend', 'src', 'roles.js')).href);
-  for (const role of [...TENANT_ROLES, 'platform_admin']) {
+  for (const role of [...TENANT_ROLES, 'platform_admin', 'platform_support', 'partner_admin', 'partner_staff']) {
     const home = front.homeForRole(role);
     const screen = front.SCREENS.find((s) => s.name === home);
     assert.ok(screen, `la pantalla de inicio "${home}" de ${role} no existe`);

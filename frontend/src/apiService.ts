@@ -268,4 +268,139 @@ export const apiService = {
   platformSetPlan(id: string, plan: string) {
     return axios.patch(`/platform/tenants/${id}/plan`, { plan }).then((r) => r.data);
   },
+  platformOverview() {
+    return axios.get('/platform/overview').then((r) => r.data);
+  },
+  platformGetTenant(id: string) {
+    return axios.get(`/platform/tenants/${id}`).then((r) => r.data);
+  },
+  platformUpdateTenant(id: string, data: Record<string, unknown>) {
+    return axios.patch(`/platform/tenants/${id}`, data).then((r) => r.data);
+  },
+  platformTenantActivity(id: string) {
+    return axios.get(`/platform/tenants/${id}/activity`).then((r) => r.data);
+  },
+  platformActivity(limit = 60) {
+    return axios.get('/platform/activity', { params: { limit } }).then((r) => r.data);
+  },
+  platformFinance(month?: string) {
+    return axios.get('/platform/finance', { params: month ? { month } : {} }).then((r) => r.data);
+  },
+  platformFinanceCsv(month: string) {
+    return axios.get('/platform/finance', { params: { month, format: 'csv' }, responseType: 'blob' }).then((r) => r.data as Blob);
+  },
+  platformCreateExpense(data: { label: string; amount: number; note?: string }) {
+    return axios.post('/platform/expenses', data).then((r) => r.data);
+  },
+  platformDeleteExpense(id: string) {
+    return axios.delete(`/platform/expenses/${id}`).then((r) => r.data);
+  },
+  platformManualPayment(id: string, data: { amount: number; months: number; note?: string }) {
+    return axios.post(`/platform/tenants/${id}/manual-payment`, data).then((r) => r.data);
+  },
+  platformListReferrers() {
+    return axios.get('/platform/referrers').then((r) => r.data);
+  },
+  supportList() {
+    return axios.get('/support/tickets').then((r) => r.data);
+  },
+  supportCreate(data: { subject: string; message: string }) {
+    return axios.post('/support/tickets', data).then((r) => r.data);
+  },
+  supportReply(id: string, message: string) {
+    return axios.post(`/support/tickets/${id}/messages`, { message }).then((r) => r.data);
+  },
+  platformSupport(params: { status?: string; q?: string } = {}) {
+    return axios.get('/platform/support', { params }).then((r) => r.data);
+  },
+  platformTenantTickets(tenantId: string) {
+    return axios.get(`/platform/tenants/${tenantId}/tickets`).then((r) => r.data);
+  },
+  platformCreateTicket(tenantId: string, data: { subject: string; message: string }) {
+    return axios.post(`/platform/tenants/${tenantId}/tickets`, data).then((r) => r.data);
+  },
+  platformGetTicket(id: string) {
+    return axios.get(`/platform/tickets/${id}`).then((r) => r.data);
+  },
+  platformReplyTicket(id: string, message: string) {
+    return axios.post(`/platform/tickets/${id}/reply`, { message }).then((r) => r.data);
+  },
+  platformSetTicketClosed(id: string, closed: boolean) {
+    return axios.post(`/platform/tickets/${id}/${closed ? 'close' : 'reopen'}`).then((r) => r.data);
+  },
+  platformMySeller() {
+    return axios.get('/platform/my-seller').then((r) => r.data);
+  },
+  platformActivateMySeller() {
+    return axios.post('/platform/my-seller').then((r) => r.data);
+  },
+  platformGetReferrer(id: string) {
+    return axios.get(`/platform/referrers/${id}`).then((r) => r.data);
+  },
+  platformCreateReferrer(data: Record<string, unknown>) {
+    return axios.post('/platform/referrers', data).then((r) => r.data);
+  },
+  platformUpdateReferrer(id: string, data: Record<string, unknown>) {
+    return axios.patch(`/platform/referrers/${id}`, data).then((r) => r.data);
+  },
+  platformPayReferrer(id: string, note?: string) {
+    return axios.post(`/platform/referrers/${id}/payouts`, { note }).then((r) => r.data);
+  },
+  platformVoidCommission(id: string, reason?: string) {
+    return axios.post(`/platform/commissions/${id}/void`, { reason }).then((r) => r.data);
+  },
+  platformReferrerUsers(id: string) {
+    return axios.get(`/platform/referrers/${id}/users`).then((r) => r.data);
+  },
+  platformCreateReferrerUser(id: string, data: Record<string, unknown>) {
+    return axios.post(`/platform/referrers/${id}/users`, data).then((r) => r.data);
+  },
+  platformSetReferrerUserActive(id: string, userId: string, active: boolean) {
+    return axios.put(`/platform/referrers/${id}/users/${userId}/active`, { active }).then((r) => r.data);
+  },
+  platformSetTenantReferrer(tenantId: string, code: string | null) {
+    return axios.put(`/platform/tenants/${tenantId}/referrer`, { code }).then((r) => r.data);
+  },
+  checkReferralCode(code: string) {
+    return axios.get(`/usuarios/referral/${encodeURIComponent(code)}`).then((r) => r.data);
+  },
+  partnerHome() {
+    return axios.get('/partner/home').then((r) => r.data);
+  },
+  partnerClients() {
+    return axios.get('/partner/clients').then((r) => r.data);
+  },
+  partnerClient(id: string) {
+    return axios.get(`/partner/clients/${id}`).then((r) => r.data);
+  },
+  partnerAddNote(id: string, text: string) {
+    return axios.post(`/partner/clients/${id}/notes`, { text }).then((r) => r.data);
+  },
+  partnerAssign(id: string, username: string | null) {
+    return axios.put(`/partner/clients/${id}/assignee`, { username }).then((r) => r.data);
+  },
+  partnerCommissions() {
+    return axios.get('/partner/commissions').then((r) => r.data);
+  },
+  partnerTeam() {
+    return axios.get('/partner/team').then((r) => r.data);
+  },
+  partnerCreateMember(data: Record<string, unknown>) {
+    return axios.post('/partner/team', data).then((r) => r.data);
+  },
+  partnerSetMemberActive(id: string, active: boolean) {
+    return axios.put(`/partner/team/${id}/${active ? 'reactivate' : 'deactivate'}`).then((r) => r.data);
+  },
+  partnerChangeRole(id: string, role: string) {
+    return axios.put(`/partner/team/${id}/role`, { role }).then((r) => r.data);
+  },
+  platformListStaff() {
+    return axios.get('/platform/staff').then((r) => r.data);
+  },
+  platformCreateStaff(data: Record<string, unknown>) {
+    return axios.post('/platform/staff', data).then((r) => r.data);
+  },
+  platformDeleteStaff(id: string) {
+    return axios.delete(`/platform/staff/${id}`).then((r) => r.data);
+  },
 };

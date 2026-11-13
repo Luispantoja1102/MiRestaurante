@@ -41,7 +41,11 @@ const ROLE_DEFS = [
 const LEGACY_ROLE_ALIASES = { hosstess: 'host' };
 
 const TENANT_ROLES = ROLE_DEFS.map((r) => r.id);
-const ROLES = [...TENANT_ROLES, 'platform_admin'];
+// Equipo de la plataforma: no pertenecen a ningún negocio. El admin lo gestiona todo; soporte consulta clientes.
+const PLATFORM_ROLES = ['platform_admin', 'platform_support'];
+// Socios (vendedores): el dueño del socio y su equipo. Tampoco pertenecen a un negocio; ven solo los clientes que llegaron con su código.
+const PARTNER_ROLES = ['partner_admin', 'partner_staff'];
+const ROLES = [...TENANT_ROLES, ...PLATFORM_ROLES, ...PARTNER_ROLES];
 
 function normalizeRole(role) {
   if (!role) return role;
@@ -52,10 +56,28 @@ function isTenantRole(role) {
   return TENANT_ROLES.includes(normalizeRole(role));
 }
 
+function isPlatformStaff(role) {
+  return PLATFORM_ROLES.includes(normalizeRole(role));
+}
+
+function isPartnerRole(role) {
+  return PARTNER_ROLES.includes(role);
+}
+
+/** Cuentas que no pertenecen a ningún negocio (plataforma y socios): su sesión no lleva tenantId. */
+function isOutsideTenant(role) {
+  return isPlatformStaff(role) || isPartnerRole(role);
+}
+
 module.exports = {
   ROLE_DEFS,
   ROLES,
   TENANT_ROLES,
+  PLATFORM_ROLES,
+  PARTNER_ROLES,
+  isPlatformStaff,
+  isPartnerRole,
+  isOutsideTenant,
   LEGACY_ROLE_ALIASES,
   normalizeRole,
   isTenantRole,

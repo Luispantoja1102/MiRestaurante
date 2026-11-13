@@ -5,6 +5,7 @@ const userController = require('../controllers/user.controller');
 const { requireAuth, requireActiveSubscription, requireRoles } = require('../middleware/auth.middleware');
 
 router.post('/register', upload.none(), userController.CreateUser);
+router.get('/referral/:code', userController.CheckReferralCode);
 router.post('/login', upload.none(), userController.LoginUsuario, (req, res) => {
   return res.status(200).json({
     token: req.token,
