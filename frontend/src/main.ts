@@ -15,7 +15,7 @@ import {
   isOutsideTenant,
 } from "./authStore";
 import "./apiService";
-import { screenRoles, setModeProvider } from "./roles";
+import { focusFor, screenRoles, setModeProvider } from "./roles";
 import CounterView from "./views/CounterView.vue";
 import InventoryView from "./views/InventoryView.vue";
 
@@ -151,8 +151,8 @@ router.beforeEach(async (to) => {
   return true;
 });
 
-// El modo de servicio (salón o mostrador) depende del tipo de negocio de los ajustes
-setModeProvider(() => venueStore.businessType);
+// El enfoque de servicio (solo para llevar, con meseros o completo) sale de los ajustes del negocio
+setModeProvider(() => focusFor(venueStore));
 
 const vuetify = createVuetify({
   components,

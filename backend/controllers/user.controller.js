@@ -77,6 +77,29 @@ const CreateUser = async (req, res) => {
   }
 };
 
+/** Cambiar mi propia contraseña (cualquier cuenta con sesión): pide la actual para confirmar que soy yo. */
+const ChangePassword = async (req, res) => {
+  try {
+    const current = String(req.body?.currentPassword || '');
+    const next = String(req.body?.newPassword || '');
+    const user = await db.FindUserByUsername(req.user.username, req.tenantId);
+    if (!user) return res.status(404).send('Usuario no encontrado');
+    if (!current || !(await hasher.checkPassword(current, user.password))) {
+      return res.status(400).send('La contraseña actual no es correcta.');
+    }
+    if (next.length < 8) return res.status(400).send('La nueva contraseña debe tener al menos 8 caracteres.');
+    if (next === current) return res.status(400).send('La nueva contraseña debe ser distinta a la actual.');
+    if (next.toLowerCase().includes(String(user.username).toLowerCase())) {
+      return res.status(400).send('La contraseña no puede contener tu usuario.');
+    }
+    await db.UpdateUserById(String(user._id), { password: await hasher.hashPassword(next), updatedAt: new Date() });
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('No pude cambiar la contraseña. Intenta de nuevo.');
+  }
+};
+
 /** Pública: el registro la usa para decir «código válido» antes de enviar el formulario. */
 const CheckReferralCode = async (req, res) => {
   try {
@@ -257,6 +280,7 @@ const Me = async (req, res) => {
 
 module.exports = {
   CreateUser,
+  ChangePassword,
   CheckReferralCode,
   FindUserByEmail,
   LoginUsuario,

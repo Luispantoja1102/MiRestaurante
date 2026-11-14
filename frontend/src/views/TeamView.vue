@@ -3,19 +3,14 @@
     <div class="team-page">
       <div class="toolbar">
         <p>Crea las cuentas de tu equipo y elige qué pantallas ve cada persona.</p>
-        <button
-          type="button"
-          class="btn-primary"
-          :disabled="full"
-          :title="full ? `El modo Café incluye hasta ${limits.maxUsers} personas` : ''"
-          @click="openCreate"
-        >+ Nueva cuenta</button>
+        <button type="button" class="btn-primary" @click="openCreate">+ Nueva cuenta</button>
       </div>
 
-      <p v-if="counter" class="banner cafe" role="status">
-        <strong>Modo Café (mostrador):</strong> {{ members.length }} de {{ limits.maxUsers }} personas.
-        <template v-if="full">Para agregar a alguien más, elimina una cuenta.</template>
-        Solo hay Administrador y Caja.
+      <p class="banner cafe" role="status">
+        <strong>{{ focusLabel }}.</strong>
+        {{ members.length }} {{ members.length === 1 ? "persona" : "personas" }}. Puedes tener varias por rol, cada una con su cuenta.
+        Roles de este enfoque: {{ roles.map((r) => r.label).join(", ") }}.
+        <router-link to="/settings">Cambiar cómo trabajas</router-link>
       </p>
 
       <p v-if="error" class="banner err" role="alert">{{ error }}</p>
@@ -167,13 +162,13 @@ import { computed, onMounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
 import { authStore } from "../authStore";
-import { COUNTER_ROLE_COPY, ROLE_DEFS, SCREENS, homeForRole, roleLabel } from "../roles";
+import { COUNTER_ROLE_COPY, ROLE_DEFS, SCREENS, focusInfo, homeForRole, roleLabel } from "../roles";
 
 const members = ref([]);
 const roles = ref(ROLE_DEFS);
-const limits = ref({ mode: "table", maxUsers: null, allowedRoles: null });
+const limits = ref({ focus: "full", mode: "table", maxUsers: null, allowedRoles: null });
 const counter = computed(() => limits.value.mode === "counter");
-const full = computed(() => limits.value.maxUsers != null && members.value.length >= limits.value.maxUsers);
+const focusLabel = computed(() => focusInfo(limits.value.focus).label);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -238,9 +233,8 @@ async function load() {
 }
 
 function openCreate() {
-  if (full.value) return;
   Object.assign(form, emptyForm());
-  // El primer rol que ofrece el negocio (en un café no existe Mesero)
+  // El primer rol que ofrece el negocio (en «solo para llevar» no existe Mesero)
   if (!roles.value.some((r) => r.id === form.role)) form.role = roles.value[0]?.id || "cashier";
   formError.value = "";
   showPw.value = false;

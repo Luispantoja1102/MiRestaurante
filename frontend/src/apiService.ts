@@ -301,6 +301,9 @@ export const apiService = {
   platformListReferrers() {
     return axios.get('/platform/referrers').then((r) => r.data);
   },
+  changePassword(data: { currentPassword: string; newPassword: string }) {
+    return axios.put('/usuarios/password', data).then((r) => r.data);
+  },
   supportList() {
     return axios.get('/support/tickets').then((r) => r.data);
   },

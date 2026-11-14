@@ -6,6 +6,7 @@ import {
   homeForRole as homeFor,
   canAccessScreen,
   currentMode,
+  currentFocus,
   OUTSIDE_TENANT_ROLE_IDS,
 } from "./roles";
 
@@ -82,7 +83,7 @@ export { roleHome, routeRoles };
 
 /** ¿Puede la sesión actual entrar a esta pantalla en el modo del negocio (salón o mostrador)? */
 export function canAccessRoute(name) {
-  return canAccessScreen(name, authStore.role, currentMode());
+  return canAccessScreen(name, authStore.role, currentMode(), currentFocus());
 }
 
 export function homeForRole(role = authStore.role) {

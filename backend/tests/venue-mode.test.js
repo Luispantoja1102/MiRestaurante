@@ -1,8 +1,9 @@
-// Modo Café (mostrador): equipo de hasta 2 personas, solo Administrador y Caja.
+// Enfoque de servicio: «solo para llevar», «con meseros» o «completo» deciden qué roles puede tener el equipo.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ObjectId } = require('mongodb');
 const { loadApp, startServer } = require('./helpers');
+const mode = require('../models/venueMode');
 
 const { app, state, tokenFor } = loadApp();
 let api;
@@ -13,132 +14,177 @@ const user = (username, role, tenantId = 't1') => ({ _id: new ObjectId(), name: 
 const idOf = (username) => String(state.users.find((u) => u.username === username)._id);
 const admin = () => tokenFor('ana', 'admin');
 const member = (over = {}) => ({ name: 'Paco', lastName: 'Perez', username: 'paco', password: 'secreta123', role: 'cashier', ...over });
-const reset = (type) => {
+const reset = (settings) => {
   state.users = [user('ana', 'admin'), user('jefe', 'admin', 't2')];
   state.invites = [];
-  state.settings.t1 = { businessType: type, businessName: 'La Casa' };
+  state.waiters = [];
+  state.settings.t1 = settings === undefined ? undefined : { businessName: 'La Casa', ...settings };
+  if (settings === undefined) delete state.settings.t1;
   state.settings.t2 = { businessType: 'restaurant', businessName: 'Otro' };
 };
+const focus = (serviceFocus) => reset({ businessType: 'restaurant', serviceFocus });
+const create = (over) => api.call('POST', '/team', { token: admin(), body: member(over) });
 
-test('café: el listado informa el modo, el tope y solo ofrece Administrador y Caja', async () => {
-  reset('cafe');
-  const r = await api.call('GET', '/team', { token: admin() });
-  assert.deepEqual(r.json.limits, { mode: 'counter', maxUsers: 2, allowedRoles: ['admin', 'cashier'] });
-  assert.deepEqual(r.json.roles.map((x) => x.id).sort(), ['admin', 'cashier']);
+// ——— Modelo (puro) ———
+test('cada enfoque define sus roles y el flujo de pantallas', () => {
+  assert.deepEqual(mode.limitsFor({ serviceFocus: 'takeaway' }), { focus: 'takeaway', mode: 'counter', maxUsers: null, allowedRoles: ['admin', 'cashier'] });
+  assert.deepEqual(mode.limitsFor({ serviceFocus: 'waiters' }), { focus: 'waiters', mode: 'table', maxUsers: null, allowedRoles: ['admin', 'cashier', 'waiter'] });
+  const full = mode.limitsFor({ serviceFocus: 'full' });
+  assert.deepEqual([full.mode, full.maxUsers, full.allowedRoles.length], ['table', null, 5]);
 });
 
-test('restaurante: sin tope y con los cinco roles (nada cambia para el flujo de salón)', async () => {
-  reset('restaurant');
-  const r = await api.call('GET', '/team', { token: admin() });
-  assert.deepEqual(r.json.limits.mode, 'table');
-  assert.equal(r.json.limits.maxUsers, null);
-  assert.equal(r.json.roles.length, 5);
-  for (const [i, role] of ['waiter', 'kitchen', 'host', 'cashier', 'admin'].entries()) {
-    const c = await api.call('POST', '/team', { token: admin(), body: member({ username: `usuario${i}`, role, cellphone: `66400000${i}0` }) });
-    assert.equal(c.status, 201, `${role}: ${c.text}`);
+test('compatibilidad: sin enfoque guardado, el café sigue como mostrador y el resto como completo', () => {
+  assert.equal(mode.focusOf({ businessType: 'cafe' }), 'takeaway');
+  assert.equal(mode.focusOf({ businessType: 'restaurant' }), 'full');
+  assert.equal(mode.focusOf({ businessType: 'bar' }), 'full');
+  assert.equal(mode.focusOf(undefined), 'full');
+  assert.equal(mode.focusOf(null), 'full');
+  assert.equal(mode.focusOf({ serviceFocus: 'raro', businessType: 'cafe' }), 'takeaway', 'un valor inválido se ignora');
+  assert.equal(mode.focusOf({ serviceFocus: 'full', businessType: 'cafe' }), 'full', 'el enfoque guardado manda sobre el tipo');
+});
+
+// ——— Equipo ———
+test('el listado informa el enfoque y solo ofrece los roles que le tocan', async () => {
+  for (const [f, roles] of [['takeaway', ['admin', 'cashier']], ['waiters', ['admin', 'cashier', 'waiter']], ['full', ['admin', 'cashier', 'host', 'kitchen', 'waiter']]]) {
+    focus(f);
+    const r = await api.call('GET', '/team', { token: admin() });
+    assert.equal(r.json.limits.focus, f);
+    assert.deepEqual(r.json.roles.map((x) => x.id).sort(), [...roles].sort(), f);
   }
 });
 
-test('un negocio sin ajustes guardados todavía se trata como restaurante', async () => {
-  reset('restaurant');
-  delete state.settings.t1;
-  const r = await api.call('POST', '/team', { token: admin(), body: member({ role: 'waiter', cellphone: '6641111111' }) });
+test('completo: puede haber varias personas por rol, cada una con su cuenta', async () => {
+  focus('full');
+  const crear = [];
+  for (const [i, role] of ['waiter', 'waiter', 'waiter', 'kitchen', 'kitchen', 'host', 'host', 'cashier', 'cashier'].entries()) {
+    crear.push(await create({ username: `usuario${i}`, role, cellphone: `66400000${i}0` }));
+  }
+  assert.ok(crear.every((c) => c.status === 201), crear.map((c) => c.text).join(' | '));
+  const roles = state.users.filter((u) => u.tenantId === 't1').map((u) => u.role);
+  assert.equal(roles.filter((r) => r === 'waiter').length, 3);
+  assert.equal(roles.filter((r) => r === 'kitchen').length, 2);
+  assert.equal(state.users.find((u) => u.username === 'usuario0').tenantId, 't1');
+});
+
+test('solo para llevar: sin tope de personas, pero nada de Mesero, Cocina ni Anfitrión', async () => {
+  focus('takeaway');
+  for (let i = 0; i < 4; i += 1) assert.equal((await create({ username: `caja${i}` })).status, 201, `caja${i}`);
+  for (const role of ['waiter', 'kitchen', 'host']) {
+    const r = await create({ username: `n_${role}`, role, cellphone: '6641234567' });
+    assert.equal(r.status, 400, role);
+    assert.match(r.text, /«Solo para llevar» solo hay Administrador y Caja/);
+  }
+});
+
+test('con meseros: hay meseros, pero no Cocina ni Anfitrión', async () => {
+  focus('waiters');
+  assert.equal((await create({ username: 'mesero1', role: 'waiter', cellphone: '6641111111' })).status, 201);
+  assert.equal((await create({ username: 'mesero2', role: 'waiter', cellphone: '6642222222' })).status, 201);
+  for (const role of ['kitchen', 'host']) {
+    const r = await create({ username: `n_${role}`, role, cellphone: '6643333333' });
+    assert.equal(r.status, 400, role);
+    assert.match(r.text, /«Con meseros» solo hay Administrador, Caja y Mesero/);
+  }
+});
+
+test('un negocio sin ajustes guardados todavía se trata como completo', async () => {
+  reset(undefined);
+  const r = await create({ role: 'kitchen', cellphone: '6641111111' });
   assert.equal(r.status, 201, r.text);
 });
 
-test('café: cabe una persona más y a la tercera dice que son hasta 2', async () => {
-  reset('cafe');
-  const ok = await api.call('POST', '/team', { token: admin(), body: member() });
-  assert.equal(ok.status, 201, ok.text);
-  const tercera = await api.call('POST', '/team', { token: admin(), body: member({ username: 'otra', role: 'cashier' }) });
-  assert.equal(tercera.status, 400);
-  assert.match(tercera.text, /hasta 2 personas/);
-  assert.equal(state.users.filter((u) => u.tenantId === 't1').length, 2);
+test('los límites son por negocio: otro negocio no los afecta', async () => {
+  focus('takeaway');
+  state.settings.t2 = { businessName: 'Otro', serviceFocus: 'full' };
+  const r = await api.call('POST', '/team', { token: tokenFor('jefe', 'admin', 't2'), body: member({ username: 'cocinero', role: 'kitchen', cellphone: '6649999999' }) });
+  assert.equal(r.status, 201, r.text);
 });
 
-test('el tope es por negocio: otro negocio con sus propios usuarios no cuenta', async () => {
-  reset('cafe');
-  state.users.push(user('x1', 'cashier', 't2'), user('x2', 'cashier', 't2'), user('x3', 'cashier', 't2'));
-  const r = await api.call('POST', '/team', { token: admin(), body: member() });
-  assert.equal(r.status, 201, 'los 4 usuarios del otro negocio no cuentan');
+test('cambiar el rol de alguien solo entre los roles del enfoque', async () => {
+  focus('takeaway');
+  await create();
+  const put = (role) => api.call('PUT', `/team/${idOf('paco')}/role`, { token: admin(), body: { role } });
+  assert.equal((await put('waiter')).status, 400);
+  assert.equal((await put('admin')).status, 200);
+
+  focus('waiters');
+  await create({ username: 'paco2' });
+  const put2 = (role) => api.call('PUT', `/team/${idOf('paco2')}/role`, { token: admin(), body: { role } });
+  assert.equal((await put2('kitchen')).status, 400);
+  assert.equal((await put2('waiter')).status, 200);
 });
 
-test('café: no se pueden crear Mesero, Cocina ni Anfitrión', async () => {
-  reset('cafe');
-  for (const role of ['waiter', 'kitchen', 'host']) {
-    const r = await api.call('POST', '/team', { token: admin(), body: member({ username: `n_${role}`, role, cellphone: '6641234567' }) });
-    assert.equal(r.status, 400, role);
-    assert.match(r.text, /solo hay Administrador y Caja/);
-  }
-});
+test('invitaciones: respetan los roles del enfoque y se vuelven a comprobar al aceptar', async () => {
+  focus('waiters');
+  const invite = (email, role) => api.call('POST', '/invites', { token: admin(), body: { email, role } });
+  assert.equal((await invite('a@x.com', 'kitchen')).status, 400, 'cocina no existe en «con meseros»');
+  assert.equal((await invite('b@x.com', 'waiter')).status, 201);
+  assert.equal((await invite('c@x.com', 'waiter')).status, 201, 'sin tope: caben todas las que quiera');
 
-test('café: al eliminar a alguien vuelve a caber otra persona', async () => {
-  reset('cafe');
-  await api.call('POST', '/team', { token: admin(), body: member() });
-  assert.equal((await api.call('POST', '/team', { token: admin(), body: member({ username: 'otra' }) })).status, 400);
-  assert.equal((await api.call('DELETE', `/team/${idOf('paco')}`, { token: admin() })).status, 200);
-  assert.equal((await api.call('POST', '/team', { token: admin(), body: member({ username: 'otra' }) })).status, 201);
-});
-
-test('café: cambiar el rol solo entre Administrador y Caja', async () => {
-  reset('cafe');
-  await api.call('POST', '/team', { token: admin(), body: member() });
-  assert.equal((await api.call('PUT', `/team/${idOf('paco')}/role`, { token: admin(), body: { role: 'waiter' } })).status, 400);
-  assert.equal((await api.call('PUT', `/team/${idOf('paco')}/role`, { token: admin(), body: { role: 'admin' } })).status, 200);
-});
-
-test('invitaciones en café: cuentan las pendientes, no los roles de salón, y revocadas o vencidas no cuentan', async () => {
-  reset('cafe');
-  const invite = (email, role = 'cashier') => api.call('POST', '/invites', { token: admin(), body: { email, role } });
-
-  assert.equal((await invite('a@x.com', 'waiter')).status, 400, 'mesero no existe en café');
-  const primera = await invite('a@x.com');
-  assert.equal(primera.status, 201, primera.text);
-  const segunda = await invite('b@x.com');
-  assert.equal(segunda.status, 400, '1 cuenta + 1 invitación pendiente ya llenan los 2 lugares');
-  assert.match(segunda.text, /hasta 2 personas/);
-
-  await api.call('PUT', `/invites/${primera.json.id}/revoke`, { token: admin() });
-  assert.equal((await invite('b@x.com')).status, 201, 'una invitación revocada libera el lugar');
-
-  state.invites.forEach((i) => { i.expiresAt = new Date(Date.now() - 1000); });
-  assert.equal((await invite('c@x.com')).status, 201, 'una invitación vencida tampoco cuenta');
-});
-
-test('aceptar una invitación vuelve a comprobar el tope (el negocio pudo llenarse o cambiar de modo)', async () => {
-  reset('restaurant');
-  const inv = await api.call('POST', '/invites', { token: admin(), body: { email: 'nuevo@x.com', role: 'waiter' } });
-  assert.equal(inv.status, 201);
   const token = state.invites[0].token;
-  state.settings.t1.businessType = 'cafe'; // pasó a café después de invitar
+  state.settings.t1.serviceFocus = 'takeaway'; // cambió de enfoque después de invitar
   const r = await api.call('POST', '/invites/accept', { body: { token, name: 'N', lastName: 'M', username: 'nuevo', password: 'secreta123' } });
   assert.equal(r.status, 400);
   assert.match(r.text, /solo hay Administrador y Caja/);
   assert.ok(!state.users.some((u) => u.username === 'nuevo'));
 });
 
-test('cambiar a café: se rechaza si hay cuentas de salón o más de 2 personas, y se acepta si cabe', async () => {
-  reset('restaurant');
-  state.users.push(user('marta', 'waiter'));
-  const save = (businessType) => api.call('POST', '/settings', { token: admin(), body: { businessName: 'La Casa', businessType } });
+// ——— Ajustes ———
+const save = (body) => api.call('POST', '/settings', { token: admin(), body: { businessName: 'La Casa', businessType: 'restaurant', ...body } });
 
-  const conMesero = await save('cafe');
-  assert.equal(conMesero.status, 400);
-  assert.match(conMesero.text, /Mesero/);
-  assert.equal(state.settings.t1.businessType, 'restaurant', 'no se guardó');
+test('cambiar de enfoque se rechaza si el equipo actual no cabe, y se acepta si cabe', async () => {
+  focus('full');
+  state.users.push(user('marta', 'waiter'), user('rene', 'kitchen'));
 
-  state.users = state.users.filter((u) => u.username !== 'marta');
-  state.users.push(user('p1', 'cashier'), user('p2', 'cashier'));
-  const tres = await save('cafe');
-  assert.equal(tres.status, 400);
-  assert.match(tres.text, /hasta 2 personas/);
+  const aLlevar = await save({ serviceFocus: 'takeaway' });
+  assert.equal(aLlevar.status, 400);
+  assert.match(aLlevar.text, /«Solo para llevar»/);
+  assert.match(aLlevar.text, /Mesero/);
+  assert.match(aLlevar.text, /Cocina/);
+  assert.equal(state.settings.t1.serviceFocus, 'full', 'no se guardó');
 
-  state.users = state.users.filter((u) => u.username !== 'p2');
-  const ok = await save('cafe');
+  const conMeseros = await save({ serviceFocus: 'waiters' });
+  assert.equal(conMeseros.status, 400);
+  assert.match(conMeseros.text, /Cocina/);
+  assert.doesNotMatch(conMeseros.text, /Mesero/);
+
+  state.users = state.users.filter((u) => u.username !== 'rene');
+  const ok = await save({ serviceFocus: 'waiters' });
   assert.ok([200, 201].includes(ok.status), ok.text);
-  assert.equal(state.settings.t1.businessType, 'cafe');
+  assert.equal(state.settings.t1.serviceFocus, 'waiters');
 
-  // Y volver a restaurante siempre se puede.
-  const vuelta = await save('restaurant');
-  assert.ok([200, 201].includes(vuelta.status));
+  // Y pasar a un enfoque con más roles siempre se puede.
+  assert.ok([200, 201].includes((await save({ serviceFocus: 'full' })).status));
+});
+
+test('guardar sin mandar el enfoque conserva el que ya tenía', async () => {
+  focus('waiters');
+  const r = await save({ businessType: 'bar' });
+  assert.ok([200, 201].includes(r.status), r.text);
+  assert.equal(state.settings.t1.serviceFocus, 'waiters');
+});
+
+test('un negocio antiguo (café sin enfoque) queda guardado como «solo para llevar»; uno de salón como «completo»', async () => {
+  reset({ businessType: 'cafe' });
+  assert.ok([200, 201].includes((await save({ businessType: 'cafe' })).status));
+  assert.equal(state.settings.t1.serviceFocus, 'takeaway');
+
+  reset({ businessType: 'restaurant' });
+  assert.ok([200, 201].includes((await save({})).status));
+  assert.equal(state.settings.t1.serviceFocus, 'full');
+});
+
+test('un enfoque inválido se rechaza', async () => {
+  focus('full');
+  const r = await save({ serviceFocus: 'volando' });
+  assert.equal(r.status, 400);
+  assert.equal(state.settings.t1.serviceFocus, 'full');
+});
+
+test('solo el administrador cambia el enfoque', async () => {
+  focus('full');
+  state.users.push(user('caja', 'cashier'));
+  const r = await api.call('POST', '/settings', { token: tokenFor('caja', 'cashier'), body: { businessName: 'La Casa', serviceFocus: 'takeaway' } });
+  assert.ok([401, 403].includes(r.status), String(r.status));
+  assert.equal(state.settings.t1.serviceFocus, 'full');
 });

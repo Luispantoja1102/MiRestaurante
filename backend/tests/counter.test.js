@@ -158,3 +158,35 @@ test('para llevar es solo una etiqueta: no cobra envío', async () => {
   assert.equal(r.json.deliveryFee, 0);
   assert.equal(r.json.total, 43.2);
 });
+
+const entrega = { name: 'Ana', phone: '55 1234 5678', address: 'Calle Sol 12, Col. Centro' };
+
+test('a domicilio cobra envío, guarda los datos y queda listo para entregar', async () => {
+  const r = await sale({ delivery: entrega, items: [{ foodId: 'f-latte', quantity: 1 }] });
+  assert.equal(r.status, 201);
+  assert.equal(r.json.modality, 'delivery');
+  assert.equal(r.json.deliveryFee, 50);
+  assert.equal(r.json.total, 93.2);
+  assert.equal(r.json.status, 'ready');
+  assert.equal(r.json.delivery.address, entrega.address);
+  assert.equal(r.json.tableName, 'Domicilio · Ana');
+});
+
+test('a domicilio exige nombre, teléfono y dirección', async () => {
+  for (const bad of [{ ...entrega, name: '' }, { ...entrega, phone: '123' }, { ...entrega, address: 'ab' }]) {
+    const r = await sale({ delivery: bad, items: [{ foodId: 'f-latte', quantity: 1 }] });
+    assert.equal(r.status, 400);
+  }
+});
+
+test('un pedido de salón a domicilio también exige datos y cobra envío', async () => {
+  const items = [{ foodId: 'f-latte', name: 'Latte', price: 40, quantity: 1 }];
+  const bad = await api.call('POST', '/orders', { token: tokenFor('x', 'cashier', 't1'), body: { modality: 'delivery', items } });
+  assert.equal(bad.status, 400);
+  const ok = await api.call('POST', '/orders', { token: tokenFor('x', 'cashier', 't1'), body: { modality: 'delivery', delivery: entrega, items } });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.json.deliveryFee, 50);
+  assert.equal(ok.json.delivery.phone, entrega.phone);
+  const llevar = await api.call('POST', '/orders', { token: tokenFor('x', 'cashier', 't1'), body: { modality: 'takeaway', items } });
+  assert.equal(llevar.json.deliveryFee, 0);
+});

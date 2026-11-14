@@ -61,6 +61,10 @@
               <span class="badge" :class="o.paymentStatus">{{ paymentText(o.paymentStatus) }}</span>
             </div>
           </div>
+          <p v-if="o.delivery" class="deliver">
+            <strong>{{ o.delivery.name }}</strong> · <a :href="`tel:${o.delivery.phone}`">{{ o.delivery.phone }}</a><br />
+            {{ o.delivery.address }}<template v-if="o.delivery.reference"> ({{ o.delivery.reference }})</template>
+          </p>
           <ul class="items">
             <li v-for="(item, i) in o.items || []" :key="i">
               {{ item.quantity }}× {{ item.name }} — {{ money(item.price * item.quantity) }}
@@ -83,6 +87,11 @@
                 @click="openPay(o)"
               >Cobrar</button>
               <button v-if="o.status === 'pending'" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
+              <button
+                v-if="o.modality === 'delivery' && !['served', 'cancelled'].includes(o.status)"
+                type="button"
+                @click="setStatus(o, 'served')"
+              >Marcar entregado</button>
             </div>
           </div>
         </article>
@@ -146,12 +155,16 @@ const cashErr = ref("");
 const filters = [
   { id: "open", label: "Abiertos" },
   { id: "unpaid", label: "Por cobrar" },
+  { id: "delivery", label: "A domicilio" },
   { id: "paid", label: "Pagados" },
   { id: "all", label: "Todos" },
 ];
 
 const filtered = computed(() => {
   if (filter.value === "all") return orders.value;
+  if (filter.value === "delivery") {
+    return orders.value.filter((o) => o.modality === "delivery" && !["served", "cancelled"].includes(o.status));
+  }
   if (filter.value === "paid") return orders.value.filter((o) => o.paymentStatus === "paid");
   if (filter.value === "unpaid") return orders.value.filter((o) => o.paymentStatus !== "paid");
   return orders.value.filter((o) => o.paymentStatus !== "paid" && o.status !== "cancelled");
@@ -408,4 +421,6 @@ onUnmounted(() => live.stop());
     padding: 1.4rem;
   }
 }
+.deliver { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--mirestaurante-muted); line-height: 1.4; }
+.deliver strong { color: var(--mirestaurante-ink); }
 </style>

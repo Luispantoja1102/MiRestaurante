@@ -42,7 +42,7 @@
 
     <div class="totals">
       <div><span>Subtotal</span><span>{{ money(subtotal) }}</span></div>
-      <div v-if="deliveryMethod === 'takeaway'"><span>Reparto</span><span>{{ money(deliveryTax) }}</span></div>
+      <div v-if="deliveryMethod === 'delivery'"><span>Reparto</span><span>{{ money(deliveryTax) }}</span></div>
       <div><span>IVA (8%)</span><span>{{ money(subtotal * taxRate) }}</span></div>
       <div class="grand"><span>Total</span><span>{{ money(total) }}</span></div>
     </div>
@@ -50,7 +50,9 @@
     <div v-if="!tableId" class="modality" role="group" aria-label="Modalidad">
       <button type="button" :aria-pressed="deliveryMethod === 'dine-in'" @click="setDeliveryMethod('dine-in')">En salón</button>
       <button type="button" :aria-pressed="deliveryMethod === 'takeaway'" @click="setDeliveryMethod('takeaway')">Para llevar</button>
+      <button type="button" :aria-pressed="deliveryMethod === 'delivery'" @click="setDeliveryMethod('delivery')">A domicilio</button>
     </div>
+    <DeliveryFields v-if="!tableId && deliveryMethod === 'delivery'" :delivery="delivery" />
 
     <button type="button" class="send" :disabled="!store.platillosSeleccionados.length || sending" @click="finalizeOrder">
       {{ sending ? 'Enviando…' : tableName ? `Enviar a cocina · ${tableName}` : 'Enviar a cocina' }}
@@ -64,8 +66,10 @@ import { store } from "../store";
 import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { apiService } from "../apiService";
+import DeliveryFields from "./DeliveryFields.vue";
 
 export default {
+  components: { DeliveryFields },
   props: {
     tableId: { type: String, default: "" },
     tableName: { type: String, default: "" },
@@ -74,6 +78,7 @@ export default {
   setup(props, { emit }) {
     const router = useRouter();
     const deliveryMethod = ref("dine-in");
+    const delivery = reactive({ name: "", phone: "", address: "", reference: "" });
     const deliveryTaxRate = 50;
     const taxRate = 0.08;
     const sending = ref(false);
@@ -86,7 +91,7 @@ export default {
       store.platillosSeleccionados.reduce((sum, p) => sum + p.price * p.quantity, 0)
     );
     const deliveryTax = computed(() =>
-      deliveryMethod.value === "takeaway" ? deliveryTaxRate : 0
+      deliveryMethod.value === "delivery" ? deliveryTaxRate : 0
     );
     const total = computed(() => subtotal.value + subtotal.value * taxRate + deliveryTax.value);
 
@@ -111,8 +116,9 @@ export default {
       try {
         await apiService.createOrder({
           tableId: props.tableId || null,
-          tableName: props.tableName || (deliveryMethod.value === "dine-in" ? "Salón" : "Para llevar"),
+          tableName: props.tableName || { "dine-in": "Salón", takeaway: "Para llevar", delivery: "A domicilio" }[deliveryMethod.value],
           modality: props.tableId ? "dine-in" : deliveryMethod.value,
+          delivery: !props.tableId && deliveryMethod.value === "delivery" ? { ...delivery } : undefined,
           items: store.platillosSeleccionados.map((p) => ({
             foodId: p.id,
             name: p.name,
@@ -123,6 +129,7 @@ export default {
         });
         store.platillosSeleccionados.splice(0, store.platillosSeleccionados.length);
         Object.keys(noteOpen).forEach((k) => delete noteOpen[k]);
+        Object.assign(delivery, { name: "", phone: "", address: "", reference: "" });
         emit("sent");
         // Con mesa, el mesero vuelve al salón; sin mesa se queda para el siguiente pedido
         if (props.tableId) router.push("/main");
@@ -142,6 +149,7 @@ export default {
       store,
       count,
       deliveryMethod,
+      delivery,
       subtotal,
       taxRate,
       deliveryTax,
@@ -242,7 +250,7 @@ h2 {
 .totals > div { display: flex; justify-content: space-between; }
 .grand { margin-top: 0.3rem; padding-top: 0.55rem; border-top: 1.5px solid var(--mirestaurante-ink); color: var(--mirestaurante-ink); font-weight: 700; font-size: 1.05rem; }
 
-.modality { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem; padding: 0.2rem; border-radius: 0.8rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); }
+.modality { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.2rem; padding: 0.2rem; border-radius: 0.8rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); }
 .modality button {
   min-height: 2.6rem;
   border: none;

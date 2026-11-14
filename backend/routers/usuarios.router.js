@@ -18,6 +18,7 @@ router.post('/forgot-password', upload.none(), userController.ForgotPassword);
 router.post('/reset-password', upload.none(), userController.ResetPassword);
 
 router.get('/me', requireAuth, userController.Me);
+router.put('/password', requireAuth, userController.ChangePassword);
 
 router.get('/find', requireAuth, requireActiveSubscription, requireRoles('admin'), upload.none(), userController.FindUserByEmail);
 router.get(

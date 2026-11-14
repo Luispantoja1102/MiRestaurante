@@ -6,6 +6,8 @@ const STORAGE_KEY = "mirestaurante_venue_settings";
 const defaultSettings = {
   businessName: "",
   businessType: "restaurant",
+  // Sin valor hasta que el negocio lo elige (los antiguos lo deducen del tipo de negocio)
+  serviceFocus: "",
   address: "",
   phone: "",
   logoUrl: "/logo.svg",
@@ -38,6 +40,7 @@ watch(
     const snapshot = {
       businessName: value.businessName,
       businessType: value.businessType,
+      serviceFocus: value.serviceFocus,
       address: value.address,
       phone: value.phone,
       logoUrl: value.logoUrl,
@@ -77,6 +80,8 @@ export async function saveVenueSettings(payload) {
     ...payload,
     setupCompleted: true,
   };
+  // Sin enfoque elegido no se manda (el servidor conserva el que tenga o lo deduce del tipo de negocio)
+  if (!next.serviceFocus) delete next.serviceFocus;
 
   try {
     const { data } = await apiClient.post("/settings", next);

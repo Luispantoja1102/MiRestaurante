@@ -5,6 +5,8 @@ const settingsSchema = Joi.object({
   businessType: Joi.string()
     .valid('restaurant', 'cafe', 'bar', 'hotel', 'other')
     .default('restaurant'),
+  // Cómo trabaja el negocio (decide sus roles y pantallas). Sin valor se conserva el que ya tenía.
+  serviceFocus: Joi.string().valid('takeaway', 'waiters', 'full').optional(),
   address: Joi.string().allow('').max(200).optional(),
   phone: Joi.string().allow('').max(30).optional(),
   logoUrl: Joi.string().allow('').max(8_000_000).optional(),

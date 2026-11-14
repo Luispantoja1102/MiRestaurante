@@ -69,24 +69,61 @@ export function normalizeRole(role) {
 }
 
 /**
- * Modo de servicio. Un café opera como MOSTRADOR (se pide, se cobra y se entrega en un solo paso: sin
- * mesas, cocina, mesero ni anfitrión) y con un equipo de hasta 2 personas. El resto de negocios usan
- * el flujo de salón. Espejo de `backend/models/venueMode.js`.
+ * Enfoque de servicio: cómo trabaja el negocio y, por lo tanto, qué roles y pantallas tiene. Espejo de
+ * `backend/models/venueMode.js` (el test `backend/tests/roles.test.js` verifica que coincidan).
+ *
+ *  - takeaway «Solo delivery o para llevar»: opera como MOSTRADOR (se pide, se cobra y se entrega en un solo paso).
+ *  - waiters  «Delivery y con meseros»: salón con mesas y meseros; la caja cobra sin pasar por cocina.
+ *  - full     «Completo»: delivery, meseros, anfitrión y cocina.
+ * Cada rol puede tener varias personas, cada una con su cuenta; el dueño les asigna el rol.
  */
-export const COUNTER_BUSINESS_TYPES = ["cafe"];
-export const COUNTER_MAX_USERS = 2;
-export const COUNTER_ROLES = ["admin", "cashier"];
+export const SERVICE_FOCUSES = [
+  {
+    id: "takeaway",
+    label: "Solo para llevar",
+    tagline: "Delivery o para llevar",
+    description: "Se pide, se cobra y se entrega en un solo paso, sin mesas ni cocina.",
+    mode: "counter",
+    roles: ["admin", "cashier"],
+  },
+  {
+    id: "waiters",
+    label: "Con meseros",
+    tagline: "Delivery y salón con meseros",
+    description: "Mesas con meseros que toman el pedido y una caja que cobra. Sin cocina ni anfitrión.",
+    mode: "table",
+    roles: ["admin", "cashier", "waiter"],
+  },
+  {
+    id: "full",
+    label: "Completo",
+    tagline: "Delivery, meseros, anfitrión y cocina",
+    description: "Todo el salón: anfitrión, meseros, cocina y caja, cada uno con su pantalla.",
+    mode: "table",
+    roles: ["admin", "cashier", "waiter", "kitchen", "host"],
+  },
+];
+// Antes de existir el enfoque, solo el tipo de negocio «café» operaba como mostrador
+export const LEGACY_TAKEAWAY_TYPES = ["cafe"];
 
-let modeProvider = () => "table";
-/** main.ts registra aquí de dónde leer el tipo de negocio (evita un import circular con venueStore). */
-export function setModeProvider(fn) {
-  modeProvider = fn;
+/** Enfoque vigente de un negocio, con la compatibilidad de los que no lo tienen guardado. */
+export function focusFor(settings) {
+  if (SERVICE_FOCUSES.some((f) => f.id === settings?.serviceFocus)) return settings.serviceFocus;
+  return LEGACY_TAKEAWAY_TYPES.includes(settings?.businessType) ? "takeaway" : "full";
 }
-export const modeForBusinessType = (type) => (COUNTER_BUSINESS_TYPES.includes(type) ? "counter" : "table");
-export const currentMode = () => modeForBusinessType(modeProvider());
+export const focusInfo = (id) => SERVICE_FOCUSES.find((f) => f.id === id) || SERVICE_FOCUSES[2];
+export const modeForFocus = (id) => focusInfo(id).mode;
+
+let focusProvider = () => "full";
+/** main.ts registra aquí de dónde leer el enfoque del negocio (evita un import circular con venueStore). */
+export function setModeProvider(fn) {
+  focusProvider = fn;
+}
+export const currentFocus = () => focusProvider();
+export const currentMode = () => modeForFocus(currentFocus());
 export const isCounterMode = () => currentMode() === "counter";
 
-/** Qué ve cada rol en un café (reemplaza a `sees`/`description` en modo mostrador). */
+/** Qué ve cada rol en «solo para llevar» (reemplaza a `sees`/`description` en modo mostrador). */
 export const COUNTER_ROLE_COPY = {
   admin: {
     description: "Atiende y además controla el negocio: menú, equipo, caja y facturación.",
@@ -102,18 +139,19 @@ const BOTH = ["table", "counter"];
 
 /**
  * Una fila por pantalla: nombre de ruta, path, etiqueta, roles con acceso y modos en que existe.
- * `counterRoles` (opcional) reemplaza a `roles` en modo mostrador.
+ * `counterRoles` (opcional) reemplaza a `roles` en modo mostrador. `focuses` (opcional) limita la pantalla a ciertos
+ * enfoques dentro de su modo (sin él, existe en todos los enfoques del modo).
  */
 export const SCREENS = [
   { name: "dashboard", path: "/dashboard", label: "Resumen", roles: ["admin"], modes: BOTH },
-  // Solo café: venta rápida de mostrador
+  // Solo para llevar: venta rápida de mostrador
   { name: "counter", path: "/counter", label: "Mostrador", roles: ["admin", "cashier"], modes: ["counter"] },
-  // Solo salón: mesas, cocina, lista de espera y meseros
-  { name: "main", path: "/main", label: "Mesas", roles: ["admin", "host", "waiter", "cashier"], modes: ["table"] },
-  { name: "kitchen", path: "/kitchen", label: "Cocina", roles: ["admin", "kitchen", "cashier", "waiter"], modes: ["table"] },
-  { name: "waitlist", path: "/waitlist", label: "Lista de espera", roles: ["admin", "host"], modes: ["table"] },
-  { name: "staff", path: "/staff", label: "Meseros", roles: ["admin"], modes: ["table"] },
-  // En salón se toma el pedido aquí; en café solo el administrador edita los productos
+  // Salón: mesas y meseros desde «con meseros»; cocina y lista de espera solo en el enfoque completo
+  { name: "main", path: "/main", label: "Mesas", roles: ["admin", "host", "waiter", "cashier"], modes: ["table"], focuses: ["waiters", "full"] },
+  { name: "kitchen", path: "/kitchen", label: "Cocina", roles: ["admin", "kitchen", "cashier", "waiter"], modes: ["table"], focuses: ["full"] },
+  { name: "waitlist", path: "/waitlist", label: "Lista de espera", roles: ["admin", "host"], modes: ["table"], focuses: ["full"] },
+  { name: "staff", path: "/staff", label: "Meseros", roles: ["admin"], modes: ["table"], focuses: ["waiters", "full"] },
+  // En salón se toma el pedido aquí; en «solo para llevar» solo el administrador edita los productos
   { name: "menu", path: "/menu", label: "Pedido", roles: ["admin", "waiter", "cashier"], counterRoles: ["admin"], modes: BOTH },
   { name: "orders", path: "/orders", label: "Caja", roles: ["admin", "cashier"], modes: BOTH },
   { name: "team", path: "/team", label: "Equipo y roles", roles: ["admin"], modes: BOTH },
@@ -149,11 +187,16 @@ export function screenRoles(name) {
   return s ? [...new Set([...s.roles, ...(s.counterRoles || [])])] : [];
 }
 
-/** ¿Puede este rol entrar a esta pantalla en este modo? Una pantalla desconocida no se restringe. */
-export function canAccessScreen(name, role, mode = "table") {
+// Sin enfoque a la mano, el modo da el valor de siempre: mostrador = solo para llevar, salón = completo
+const focusOfMode = (mode) => (mode === "counter" ? "takeaway" : "full");
+
+/** ¿Puede este rol entrar a esta pantalla en este modo y enfoque? Una pantalla desconocida no se restringe. */
+export function canAccessScreen(name, role, mode = "table", focus = focusOfMode(mode)) {
   const s = SCREENS.find((x) => x.name === name);
   if (!s) return true;
-  return s.modes.includes(mode) && rolesFor(s, mode).includes(normalizeRole(role));
+  if (!s.modes.includes(mode)) return false;
+  if (s.focuses && !s.focuses.includes(focus)) return false;
+  return rolesFor(s, mode).includes(normalizeRole(role));
 }
 
 /** Pantalla de inicio de un rol. En modo mostrador todos entran directo a vender. */
@@ -164,7 +207,7 @@ export function homeForRole(role, mode = "table") {
   return roleHome[r] || "main";
 }
 
-/** Pantallas a las que puede entrar un rol en un modo (útil para menús y para documentar). */
-export function screensForRole(role, mode = "table") {
-  return SCREENS.filter((s) => canAccessScreen(s.name, role, mode));
+/** Pantallas a las que puede entrar un rol en un modo y enfoque (útil para menús y para documentar). */
+export function screensForRole(role, mode = "table", focus = focusOfMode(mode)) {
+  return SCREENS.filter((s) => canAccessScreen(s.name, role, mode, focus));
 }

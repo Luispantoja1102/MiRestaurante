@@ -25,18 +25,24 @@ async function SaveSettings(req, res) {
       return res.status(400).send(error.details.map((d) => d.message).join(', '));
     }
 
-    // Cambiar a modo Café con un equipo que no cabe dejaría gente sin pantallas: se pide arreglarlo antes.
-    const fitError = teamFitError(limitsFor(value), await db.GetUsersByTenant(req.tenantId));
+    const existing = await db.GetSettings(req.tenantId);
+
+    // Si no mandan el enfoque se conserva el que ya tenía (o el que deduce su tipo de negocio); queda guardado explícito.
+    const focused = { ...value, serviceFocus: value.serviceFocus ?? existing?.serviceFocus };
+    const limits = limitsFor(focused);
+
+    // Cambiar a un enfoque con menos roles con un equipo que no cabe dejaría gente sin pantallas: se pide arreglarlo antes.
+    const fitError = teamFitError(limits, await db.GetUsersByTenant(req.tenantId));
     if (fitError) return res.status(400).send(fitError);
 
     const payload = {
       ...value,
+      serviceFocus: limits.focus,
       tenantId: req.tenantId,
       setupCompleted: true,
       updatedAt: new Date(),
     };
 
-    const existing = await db.GetSettings(req.tenantId);
     if (!existing) {
       payload.createdAt = new Date();
       const created = await db.CreateSettings(payload);

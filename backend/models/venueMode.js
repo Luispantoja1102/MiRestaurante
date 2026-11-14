@@ -1,56 +1,83 @@
 /**
- * Modo de servicio del negocio. Un café opera como MOSTRADOR: se pide, se cobra y se entrega en un
- * solo paso, sin mesas, cocina, mesero ni anfitrión, y con un equipo de hasta 2 personas.
- * El resto de los tipos de negocio usan el flujo de salón (mesas → cocina → caja).
+ * Enfoque de servicio del negocio: cómo trabaja y, por lo tanto, qué roles puede tener su equipo.
+ *
+ *  - takeaway  «Solo delivery o para llevar»: opera como MOSTRADOR (se pide, se cobra y se entrega en un solo paso,
+ *              sin mesas, cocina ni mesero). Roles: Administrador y Caja.
+ *  - waiters   «Delivery y con meseros»: flujo de salón con mesas y meseros; la caja cobra sin pasar por cocina.
+ *              Roles: Administrador, Caja y Mesero.
+ *  - full      «Completo» (delivery, meseros, anfitrión y cocina): todos los roles.
+ *
+ * Cada rol puede tener varias personas, cada una con su cuenta; el dueño les asigna el rol. No hay tope de personas.
+ *
+ * Los negocios creados antes de existir el enfoque no lo tienen guardado: los cafés pasan a `takeaway` (como ya
+ * operaban) y el resto a `full` (nada cambia para ellos).
  *
  * El frontend tiene su espejo en `frontend/src/roles.js`; `tests/roles.test.js` verifica que coincidan.
  */
-const { TENANT_ROLES, ROLE_DEFS } = require('./roles');
+const { TENANT_ROLES } = require('./roles');
 
-const COUNTER_BUSINESS_TYPES = ['cafe'];
-const COUNTER_MAX_USERS = 2;
-const COUNTER_ROLES = ['admin', 'cashier'];
+const SERVICE_FOCUSES = ['takeaway', 'waiters', 'full'];
+const FOCUS_ROLES = {
+  takeaway: ['admin', 'cashier'],
+  waiters: ['admin', 'cashier', 'waiter'],
+  full: TENANT_ROLES,
+};
+const FOCUS_LABELS = { takeaway: 'Solo para llevar', waiters: 'Con meseros', full: 'Completo' };
+// Antes del enfoque, solo el tipo de negocio «café» operaba como mostrador
+const LEGACY_TAKEAWAY_TYPES = ['cafe'];
 
+/** Enfoque vigente de un negocio, con la compatibilidad de los que no lo tienen guardado. */
+function focusOf(settings) {
+  if (SERVICE_FOCUSES.includes(settings?.serviceFocus)) return settings.serviceFocus;
+  return LEGACY_TAKEAWAY_TYPES.includes(settings?.businessType) ? 'takeaway' : 'full';
+}
+
+/** Flujo de pantallas: el mostrador para «solo para llevar»; mesas, caja y demás para el resto. */
 function modeOf(settings) {
-  return COUNTER_BUSINESS_TYPES.includes(settings?.businessType) ? 'counter' : 'table';
+  return focusOf(settings) === 'takeaway' ? 'counter' : 'table';
 }
 
-/** Límites del negocio según su modo: { mode, maxUsers (null = sin tope), allowedRoles }. */
+/** Límites del negocio según su enfoque: { focus, mode, maxUsers (null = sin tope), allowedRoles }. */
 function limitsFor(settings) {
-  const mode = modeOf(settings);
-  if (mode === 'counter') return { mode, maxUsers: COUNTER_MAX_USERS, allowedRoles: COUNTER_ROLES };
-  return { mode, maxUsers: null, allowedRoles: TENANT_ROLES };
+  const focus = focusOf(settings);
+  return { focus, mode: modeOf(settings), maxUsers: null, allowedRoles: FOCUS_ROLES[focus] };
 }
 
-const roleName = (id) => ROLE_DEFS.find((r) => r.id === id)?.label || id;
+const roleName = (id) => require('./roles').ROLE_DEFS.find((r) => r.id === id)?.label || id;
+const joinNames = (ids) => {
+  const names = ids.map(roleName);
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} y ${names[names.length - 1]}` : names[0];
+};
 
 /** Mensaje de error si agregar esta cuenta rompe los límites del negocio; null si cabe. */
 function memberLimitError(limits, role, currentCount) {
   if (!limits.allowedRoles.includes(role)) {
-    return `En modo Café solo hay ${limits.allowedRoles.map(roleName).join(' y ')}.`;
+    return `En «${FOCUS_LABELS[limits.focus]}» solo hay ${joinNames(limits.allowedRoles)}.`;
   }
   if (limits.maxUsers != null && currentCount >= limits.maxUsers) {
-    return `El modo Café incluye hasta ${limits.maxUsers} personas. Elimina una cuenta para agregar otra.`;
+    return `Este enfoque incluye hasta ${limits.maxUsers} personas. Elimina una cuenta para agregar otra.`;
   }
   return null;
 }
 
-/** Mensaje de error si el equipo actual no cabe en el modo (p. ej. al cambiar a Café); null si cabe. */
+/** Mensaje de error si el equipo actual no cabe en el enfoque (p. ej. al pasar a «Solo para llevar»); null si cabe. */
 function teamFitError(limits, users) {
   const wrong = [...new Set(users.map((u) => u.role).filter((r) => !limits.allowedRoles.includes(r)))];
   if (wrong.length) {
-    return `Para usar el modo Café primero elimina o cambia las cuentas con rol ${wrong.map(roleName).join(', ')}.`;
+    return `Para usar «${FOCUS_LABELS[limits.focus]}» primero elimina o cambia las cuentas con rol ${wrong.map(roleName).join(', ')}.`;
   }
   if (limits.maxUsers != null && users.length > limits.maxUsers) {
-    return `El modo Café incluye hasta ${limits.maxUsers} personas y tienes ${users.length} cuentas. Elimina las que sobran.`;
+    return `Este enfoque incluye hasta ${limits.maxUsers} personas y tienes ${users.length} cuentas. Elimina las que sobran.`;
   }
   return null;
 }
 
 module.exports = {
-  COUNTER_BUSINESS_TYPES,
-  COUNTER_MAX_USERS,
-  COUNTER_ROLES,
+  SERVICE_FOCUSES,
+  FOCUS_ROLES,
+  FOCUS_LABELS,
+  LEGACY_TAKEAWAY_TYPES,
+  focusOf,
   modeOf,
   limitsFor,
   memberLimitError,

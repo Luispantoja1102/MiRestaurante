@@ -114,24 +114,27 @@
             <p v-else class="empty-ticket">Toca un producto para agregarlo.</p>
 
             <div class="options">
-              <label class="field">
+              <label v-if="where !== 'delivery'" class="field">
                 <span>Nombre <em>(opcional)</em></span>
                 <input v-model="customerName" type="text" maxlength="40" autocomplete="off" placeholder="Para llamarlo al entregar" />
               </label>
               <div class="where" role="group" aria-label="Dónde lo consume">
-                <button type="button" :aria-pressed="!takeaway" @click="takeaway = false">Aquí</button>
-                <button type="button" :aria-pressed="takeaway" @click="takeaway = true">Para llevar</button>
+                <button type="button" :aria-pressed="where === 'here'" @click="where = 'here'">Aquí</button>
+                <button type="button" :aria-pressed="where === 'takeaway'" @click="where = 'takeaway'">Para llevar</button>
+                <button type="button" :aria-pressed="where === 'delivery'" @click="where = 'delivery'">A domicilio</button>
               </div>
+              <DeliveryFields v-if="where === 'delivery'" :delivery="delivery" />
             </div>
 
             <div class="totals">
               <div><span>Subtotal</span><span>{{ money(totals.subtotal) }}</span></div>
               <div><span>IVA (8%)</span><span>{{ money(totals.tax) }}</span></div>
+              <div v-if="totals.shipping"><span>Reparto</span><span>{{ money(totals.shipping) }}</span></div>
               <div class="grand"><span>Total</span><span>{{ money(totals.total) }}</span></div>
             </div>
 
-            <button type="button" class="btn charge" :disabled="!lines.length || !cash.open" @click="openPay">
-              {{ cash.open ? `Cobrar ${money(totals.total)}` : 'Abre la caja para cobrar' }}
+            <button type="button" class="btn charge" :disabled="!lines.length || !cash.open || deliveryMissing" @click="openPay">
+              {{ !cash.open ? 'Abre la caja para cobrar' : deliveryMissing ? 'Completa los datos de entrega' : `Cobrar ${money(totals.total)}` }}
             </button>
           </div>
         </aside>
@@ -211,7 +214,7 @@
                 </div>
                 <label>
                   Recibido
-                  <input ref="receivedInput" v-model.number="pay.received" type="number" inputmode="decimal" min="0" step="0.5" />
+                  <input ref="receivedInput" v-model.number="pay.received" type="number" inputmode="decimal" min="0" step="0.01" />
                 </label>
                 <p class="change" :class="{ short: cashShort }" role="status">
                   <template v-if="cashShort">Faltan {{ money(totals.total - receivedNumber) }}</template>
@@ -251,6 +254,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import AppShell from "../components/AppShell.vue";
+import DeliveryFields from "../components/DeliveryFields.vue";
 import { apiService } from "../apiService";
 import { hasRole } from "../authStore";
 import { bindLive } from "../live";
@@ -258,6 +262,7 @@ import { extrasOf, lineKey, missingIngredients, priceWithExtras } from "../recip
 
 // El servidor recalcula todo (precios del menú, IVA, total); esto solo muestra lo mismo mientras se arma la cuenta.
 const TAX_RATE = 0.08;
+const DELIVERY_FEE = 50; // igual que en el servidor
 const round2 = (n) => Number(Number(n).toFixed(2));
 const money = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 
@@ -293,7 +298,8 @@ const stockAlert = computed(() => {
 });
 const noteOpen = reactive({});
 const customerName = ref("");
-const takeaway = ref(false);
+const where = ref("here"); // here | takeaway | delivery
+const delivery = reactive({ name: "", phone: "", address: "", reference: "" });
 const sheetOpen = ref(false);
 
 const cash = reactive({ loaded: false, open: false, busy: false, error: "", total: 0, count: 0 });
@@ -308,8 +314,12 @@ const itemCount = computed(() => lines.value.reduce((n, l) => n + l.quantity, 0)
 const totals = computed(() => {
   const subtotal = lines.value.reduce((sum, l) => sum + l.price * l.quantity, 0);
   const tax = round2(subtotal * TAX_RATE);
-  return { subtotal: round2(subtotal), tax, total: round2(subtotal + tax) };
+  const shipping = where.value === "delivery" ? DELIVERY_FEE : 0;
+  return { subtotal: round2(subtotal), tax, shipping, total: round2(subtotal + tax + shipping) };
 });
+const deliveryMissing = computed(
+  () => where.value === "delivery" && (!delivery.name.trim() || delivery.phone.replace(/\D/g, "").length < 7 || delivery.address.trim().length < 5)
+);
 const receivedNumber = computed(() => Number(pay.received) || 0);
 const cashShort = computed(() => receivedNumber.value + 1e-9 < totals.value.total);
 // Billetes redondos que cubren el total (los dos más cercanos y el siguiente)
@@ -346,7 +356,8 @@ function removeLine(i) {
 function clearCart() {
   lines.value = [];
   customerName.value = "";
-  takeaway.value = false;
+  where.value = "here";
+  Object.assign(delivery, { name: "", phone: "", address: "", reference: "" });
   Object.keys(noteOpen).forEach((k) => delete noteOpen[k]);
   sheetOpen.value = false;
 }
@@ -491,7 +502,8 @@ async function confirmPay() {
       paymentMethod: pay.method,
       amountReceived: pay.method === "cash" ? receivedNumber.value : undefined,
       customerName: customerName.value.trim(),
-      takeaway: takeaway.value,
+      takeaway: where.value === "takeaway",
+      delivery: where.value === "delivery" ? { ...delivery } : undefined,
       items: lines.value.map((l) => ({
         foodId: l.foodId,
         quantity: l.quantity,
@@ -605,7 +617,7 @@ onUnmounted(() => live.stop());
 .field { display: grid; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
 .field em { font-weight: 500; color: var(--mirestaurante-muted); font-style: normal; }
 .field input { min-height: 2.8rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.7rem; padding: 0 0.8rem; font: inherit; background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); min-width: 0; }
-.where { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+.where { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
 .where button { min-height: 2.6rem; border-radius: 0.7rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); font-weight: 700; cursor: pointer; }
 .where button[aria-pressed="true"] { background: var(--mirestaurante-primary-soft); border-color: var(--mirestaurante-primary); color: var(--mirestaurante-primary); }
 .totals { display: grid; gap: 0.3rem; font-size: 0.92rem; color: var(--mirestaurante-muted); }

@@ -11,10 +11,10 @@
         </div>
       </header>
 
-      <div class="progress-track" role="progressbar" :aria-valuenow="step" aria-valuemin="1" aria-valuemax="4">
-        <div class="progress-fill" :style="{ width: `${(step / 4) * 100}%` }"></div>
+      <div class="progress-track" role="progressbar" :aria-valuenow="step" aria-valuemin="1" :aria-valuemax="totalSteps">
+        <div class="progress-fill" :style="{ width: `${(step / totalSteps) * 100}%` }"></div>
       </div>
-      <p class="step-label">Paso {{ step }} de 4 — {{ stepTitles[step - 1] }}</p>
+      <p class="step-label">Paso {{ step }} de {{ totalSteps }} — {{ stepTitles[step - 1] }}</p>
 
       <!-- Paso 1: Bienvenida -->
       <section v-if="step === 1" class="step-body">
@@ -51,11 +51,6 @@
           </select>
         </label>
 
-        <p v-if="isCafe" class="cafe-note">
-          <strong>Modo Café (mostrador).</strong> Se pide, se cobra y se entrega en un solo paso, sin mesas, cocina ni
-          meseros. Incluye hasta 2 personas: Administrador y Caja.
-        </p>
-
         <label class="field">
           <span>Dirección <em>(opcional)</em></span>
           <input v-model="form.address" type="text" maxlength="200" placeholder="Calle, colonia, ciudad" />
@@ -67,8 +62,16 @@
         </label>
       </section>
 
-      <!-- Paso 3: Identidad -->
+      <!-- Paso 3: Enfoque -->
       <section v-else-if="step === 3" class="step-body">
+        <h2>¿Cómo trabaja tu negocio?</h2>
+        <p>Elige una opción. Define qué roles tendrá tu equipo y qué pantallas verá cada uno. Puedes cambiarla después en Ajustes.</p>
+
+        <FocusPicker v-model="form.serviceFocus" />
+      </section>
+
+      <!-- Paso 4: Identidad -->
+      <section v-else-if="step === 4" class="step-body">
         <h2>Logo del negocio</h2>
         <p>El sistema usa colores fijos (claro/oscuro). Aquí solo personalizas el logo del cliente.</p>
 
@@ -91,7 +94,7 @@
         </label>
       </section>
 
-      <!-- Paso 4: Operación -->
+      <!-- Paso 5: Operación -->
       <section v-else class="step-body">
         <h2>Preferencias operativas</h2>
         <p>Ajusta el punto de partida. Las mesas se pueden gestionar después desde el panel.</p>
@@ -111,7 +114,7 @@
           </select>
         </label>
 
-        <label v-if="!isCafe" class="field">
+        <label v-if="hasTables" class="field">
           <span>Mesas iniciales (referencia)</span>
           <input v-model.number="form.initialTables" type="number" min="0" max="100" />
         </label>
@@ -121,9 +124,9 @@
           <dl>
             <div><dt>Negocio</dt><dd>{{ form.businessName || "—" }}</dd></div>
             <div><dt>Tipo</dt><dd>{{ typeLabel }}</dd></div>
+            <div><dt>Enfoque</dt><dd>{{ focus?.label || "—" }}</dd></div>
             <div><dt>Dirección</dt><dd>{{ form.address || "Sin definir" }}</dd></div>
-            <div v-if="!isCafe"><dt>Mesas</dt><dd>{{ form.initialTables }}</dd></div>
-            <div v-else><dt>Modo</dt><dd>Mostrador</dd></div>
+            <div v-if="hasTables"><dt>Mesas</dt><dd>{{ form.initialTables }}</dd></div>
           </dl>
         </div>
 
@@ -136,7 +139,7 @@
         </button>
         <div class="spacer"></div>
         <button
-          v-if="step < 4"
+          v-if="step < totalSteps"
           type="button"
           class="btn-primary"
           @click="next"
@@ -163,24 +166,28 @@ import { computed, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { saveVenueSettings, venueStore } from "../venueStore";
 import { homeForRole } from "../authStore";
-import { modeForBusinessType } from "../roles";
+import FocusPicker from "../components/FocusPicker.vue";
+import { focusInfo } from "../roles";
 
 const router = useRouter();
 const step = ref(1);
-const isCafe = computed(() => modeForBusinessType(form.businessType) === "counter");
 const saving = ref(false);
 const error = ref("");
 
 const stepTitles = [
   "Bienvenida",
   "Negocio",
+  "Enfoque",
   "Identidad",
   "Operación",
 ];
+const totalSteps = stepTitles.length;
 
 const form = reactive({
   businessName: venueStore.businessName || "",
   businessType: venueStore.businessType || "restaurant",
+  // Sin valor hasta que lo elige: un negocio nuevo tiene que decidir cómo trabaja
+  serviceFocus: venueStore.serviceFocus || "",
   address: venueStore.address || "",
   phone: venueStore.phone || "",
   logoUrl: venueStore.logoUrl || "/logo.svg",
@@ -201,18 +208,21 @@ const typeLabels = {
 const typeLabel = computed(() => typeLabels[form.businessType] || "Negocio");
 
 const previewLogo = computed(() => form.logoUrl || "/logo.svg");
+const focus = computed(() => (form.serviceFocus ? focusInfo(form.serviceFocus) : null));
+// Sin mesas en «solo para llevar»
+const hasTables = computed(() => focus.value?.mode !== "counter");
 
 const canContinue = computed(() => {
   if (step.value === 2) return form.businessName.trim().length >= 2;
-  if (step.value === 3) return true;
-  if (step.value === 4) return form.initialTables >= 0;
+  if (step.value === 3) return Boolean(form.serviceFocus);
+  if (step.value === 5) return !hasTables.value || form.initialTables >= 0;
   return true;
 });
 
 function next() {
   if (!canContinue.value) return;
   error.value = "";
-  step.value = Math.min(4, step.value + 1);
+  step.value = Math.min(totalSteps, step.value + 1);
 }
 
 function prev() {
@@ -250,7 +260,6 @@ async function finish() {
 </script>
 
 <style scoped>
-.cafe-note { margin: 0; padding: 0.75rem 0.9rem; border-radius: 0.8rem; background: var(--mirestaurante-primary-soft); color: var(--mirestaurante-ink); font-size: 0.9rem; line-height: 1.45; }
 .setup-shell {
   --primary: var(--mirestaurante-primary);
   --accent: #9a7b52;

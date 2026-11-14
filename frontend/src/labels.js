@@ -16,6 +16,7 @@ export const paymentStatusLabel = {
 export const modalityLabel = {
   "dine-in": "En salón",
   takeaway: "Para llevar",
+  delivery: "A domicilio",
 };
 
 export { roleLabel } from "./roles";

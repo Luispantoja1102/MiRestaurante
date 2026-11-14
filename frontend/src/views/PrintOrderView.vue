@@ -27,6 +27,12 @@
         <p v-if="order.source === 'counter'">ATENCION....: MOSTRADOR{{ order.customerName ? ' · ' + order.customerName.toUpperCase() : '' }}</p>
         <p v-else>MESA........: {{ (order.tableName || 'SIN MESA').toUpperCase() }}</p>
         <p>SERVICIO....: {{ modalityText(order.modality).toUpperCase() }}</p>
+        <template v-if="order.delivery">
+          <p>ENTREGA.....: {{ order.delivery.name.toUpperCase() }}</p>
+          <p>TELEFONO....: {{ order.delivery.phone }}</p>
+          <p>DIRECCION...: {{ order.delivery.address.toUpperCase() }}</p>
+          <p v-if="order.delivery.reference">REFERENCIA..: {{ order.delivery.reference.toUpperCase() }}</p>
+        </template>
         <p>APERTURA....: {{ formatDate(order.createdAt) }}</p>
         <p v-if="mode !== 'kitchen' && order.paidAt">
           COBRO.......: {{ formatDate(order.paidAt) }}

@@ -5,11 +5,12 @@ Plataforma web de gestión de salón para restaurantes, cafés y hostelería. Ca
 Stack: Vue.js (frontend), Express.js (backend) y MongoDB. Monorepositorio: todo se ejecuta desde la raíz (`npm install`, `npm run dev`).
 
 ## Notas
-- Decisiones: carpeta `Decisiones/`.
-- Sesiones de trabajo: carpeta `Sesiones/`. Última: [[MiRestaurante/Sesiones/2026-11-13 Platform admin soporte]] (antes [[MiRestaurante/Sesiones/2026-11-13 Platform admin referidos y socios]], [[MiRestaurante/Sesiones/2026-11-13 Platform admin finanzas]] y [[MiRestaurante/Sesiones/2026-11-13 Platform admin como MiTiendita]]).
+- Decisiones: carpeta `Decisiones/`. Última: [[MiRestaurante/Decisiones/2026-11-13 Enfoque de servicio]].
+- Sesiones de trabajo: carpeta `Sesiones/`. Última: [[MiRestaurante/Sesiones/2026-11-13 Pedidos a domicilio]] (antes [[MiRestaurante/Sesiones/2026-11-13 Asistente, enfoques y ajustes]], [[MiRestaurante/Sesiones/2026-11-13 Platform admin soporte]], [[MiRestaurante/Sesiones/2026-11-13 Platform admin referidos y socios]], [[MiRestaurante/Sesiones/2026-11-13 Platform admin finanzas]] y [[MiRestaurante/Sesiones/2026-11-13 Platform admin como MiTiendita]]).
 
 ## Estado
 - Vault creado el 2026-11-13.
 - Platform admin: las 4 fases hechas (clientes y equipo, finanzas, referidos y socios, soporte).
+- Negocios: asistente de 5 pasos con enfoque de servicio (para llevar, con meseros, completo), varias personas por rol y Ajustes con menú agrupado. Pedidos a domicilio: nombre, teléfono y dirección, envío de $50 y «Marcar entregado» (sin repartidor asignado todavía).
 - Pendiente: registrar como cobros (y comisiones) los pagos automáticos de Mercado Pago.
 - Pendiente opcional: leer por IMAP las respuestas por correo a los tickets de soporte.

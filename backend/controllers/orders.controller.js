@@ -1,5 +1,5 @@
 const db = require('../database/mongodb');
-const { normalizeOrder, orderStatuses, paymentMethods } = require('../models/order.model');
+const { normalizeOrder, normalizeDelivery, orderStatuses, paymentMethods } = require('../models/order.model');
 const inv = require('../models/inventory');
 const inventory = require('../services/inventory.service');
 
@@ -58,6 +58,13 @@ async function create(req, res) {
 
     const payload = normalizeOrder(body);
     payload.tenantId = req.tenantId;
+    if (payload.modality === 'delivery') {
+      const d = normalizeDelivery(body.delivery);
+      if (d.error) return res.status(400).send(d.error);
+      payload.delivery = d.value;
+      payload.tableId = null;
+      payload.tableName = `Domicilio · ${d.value.name}`;
+    }
     if (!payload.items.length) {
       return res.status(400).send('El pedido necesita al menos un producto');
     }
@@ -167,8 +174,15 @@ async function counterSale(req, res) {
       });
     }
 
-    // normalizeOrder calcula subtotal, IVA y total; no hay costo de envío en mostrador.
-    const payload = normalizeOrder({ items, modality: 'dine-in' });
+    let delivery = null;
+    if (body.delivery) {
+      const d = normalizeDelivery(body.delivery);
+      if (d.error) return res.status(400).send(d.error);
+      delivery = d.value;
+    }
+
+    // normalizeOrder calcula subtotal, IVA y total (con envío solo si es a domicilio).
+    const payload = normalizeOrder({ items, modality: delivery ? 'delivery' : 'dine-in' });
     payload.items = items; // normalizeOrder solo conserva los campos básicos; aquí también van las opciones
     const customerName = String(body.customerName || '').trim().slice(0, 40);
     let received = null;
@@ -181,14 +195,16 @@ async function counterSale(req, res) {
 
     const settings = await db.GetSettings(req.tenantId);
     const now = new Date();
+
     Object.assign(payload, {
       tenantId: req.tenantId,
       source: 'counter',
-      modality: body.takeaway ? 'takeaway' : 'dine-in',
+      modality: delivery ? 'delivery' : body.takeaway ? 'takeaway' : 'dine-in',
       tableId: null,
-      customerName,
-      tableName: customerName ? `Mostrador · ${customerName}` : 'Mostrador',
-      status: 'served',
+      customerName: delivery ? delivery.name : customerName,
+      tableName: delivery ? `Domicilio · ${delivery.name}` : customerName ? `Mostrador · ${customerName}` : 'Mostrador',
+      // A domicilio se cobra al despachar pero queda «listo» hasta que se marque entregado
+      status: delivery ? 'ready' : 'served',
       paymentStatus: 'paid',
       paymentMethod: method,
       paidAt: now,
@@ -198,6 +214,7 @@ async function counterSale(req, res) {
       createdAt: now,
       updatedAt: now,
     });
+    if (delivery) payload.delivery = delivery;
     if (clientRef) payload.clientRef = clientRef;
     if (received != null) {
       payload.amountReceived = round2(received);
