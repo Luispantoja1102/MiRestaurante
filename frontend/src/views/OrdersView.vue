@@ -95,7 +95,7 @@
               >Cobrar</button>
               <button v-if="o.status === 'pending' && !waiting(o)" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
               <button
-                v-if="o.modality === 'delivery' && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
+                v-if="(o.modality === 'delivery' || (o.external && o.status === 'ready')) && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
                 type="button"
                 @click="setStatus(o, 'served')"
               >Marcar entregado</button>

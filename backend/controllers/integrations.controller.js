@@ -1,6 +1,7 @@
 const db = require('../database/mongodb');
 const uber = require('../services/uber.service');
 const inventory = require('../services/inventory.service');
+const { focusOf } = require('../models/venueMode');
 
 const STORE_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -95,10 +96,12 @@ async function acceptUberOrder(req, res) {
       return uberFail(res, err);
     }
     const now = new Date();
+    // Sin pantalla de Cocina (enfoques «para llevar» y «con meseros») nadie lo marcaría listo: pasa directo a «Listo»
+    const kitchen = focusOf(await db.GetSettings(req.tenantId)) === 'full';
     const updated = await db.UpdateOrder(
       order.id,
       {
-        status: 'preparing',
+        status: kitchen ? 'preparing' : 'ready',
         paymentStatus: 'paid',
         paymentMethod: 'platform',
         paidAt: now,

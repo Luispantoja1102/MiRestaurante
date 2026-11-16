@@ -147,11 +147,6 @@
             <button type="button" class="link-btn" :disabled="uber.busy" @click="unlinkUber">Desvincular</button>
           </p>
 
-          <div class="webhook-box">
-            <p class="hint">URL que Uber debe llamar (cópiala en el panel de desarrolladores de Uber, en Webhooks):</p>
-            <code class="webhook-url">{{ webhookUrl }}</code>
-            <p v-if="isLocal" class="hint">Estás en tu computadora: Uber necesita una dirección pública, por ejemplo con un túnel (ngrok o Cloudflare Tunnel) hacia el puerto 8081.</p>
-          </div>
           <p v-if="uber.error" class="err" role="alert">{{ uber.error }}</p>
         </section>
 
@@ -192,7 +187,6 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import FocusPicker from "../components/FocusPicker.vue";
-import axios from "axios";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
 import { saveVenueSettings, venueStore } from "../venueStore";
@@ -342,11 +336,6 @@ async function removeInvite(i) {
 
 // ——— Uber Eats ———
 const uber = reactive({ loaded: false, configured: false, environment: "sandbox", storeId: "", storeInput: "", busy: false, error: "" });
-const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";
-const webhookUrl = computed(() => {
-  const base = new URL(axios.defaults.baseURL || "/", window.location.origin);
-  return new URL("integrations/uber/webhook", base.href.endsWith("/") ? base.href : base.href + "/").href;
-});
 
 async function loadUber() {
   try {
@@ -474,8 +463,6 @@ onMounted(() => {
 label { display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 500; }
 .inline-field { max-width: 14rem; }
 input, select { border: 1px solid var(--mirestaurante-line); border-radius: 0.65rem; padding: 0.65rem 0.75rem; font: inherit; background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); }
-.webhook-box { display: grid; gap: 0.4rem; }
-.webhook-url { display: block; padding: 0.6rem 0.75rem; border-radius: 0.6rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); font-size: 0.82rem; overflow-wrap: anywhere; user-select: all; }
 .link-btn { margin-left: 0.6rem; background: none; border: none; padding: 0; color: var(--mirestaurante-danger); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
 .btn-primary { justify-self: start; background: var(--mirestaurante-primary); color: var(--mirestaurante-on-primary); border: none; border-radius: 0.7rem; padding: 0.65rem 1.05rem; font-weight: 600; cursor: pointer; box-shadow: var(--mirestaurante-shadow); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }

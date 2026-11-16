@@ -164,6 +164,20 @@ test('aceptar avisa a Uber, cobra como Plataforma en la caja abierta y manda el 
   assert.equal((await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier() })).status, 400);
 });
 
+test('sin pantalla de Cocina (solo para llevar o con meseros) el pedido aceptado pasa directo a Listo', async () => {
+  for (const [i, serviceFocus] of ['takeaway', 'waiters'].entries()) {
+    const id = `o-kkkkk${i + 1}`;
+    uberOrders[id] = sample(id, { type: 'PICK_UP' });
+    await hook(body('orders.notification', id));
+    state.settings.t1 = { businessName: 'La Casa', serviceFocus };
+    const r = await api.call('PUT', `/orders/${uberOrder(id).id}/external/accept`, { token: cashier() });
+    delete state.settings.t1;
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.status, 'ready', serviceFocus);
+    assert.equal(r.json.external.state, 'accepted');
+  }
+});
+
 test('rechazar avisa a Uber con el motivo y cancela el pedido', async () => {
   uberOrders['o-bbbbb2'] = sample('o-bbbbb2');
   await hook(body('orders.notification', 'o-bbbbb2'));
