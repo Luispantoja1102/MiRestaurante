@@ -59,12 +59,18 @@ function createFakeDb() {
       return i;
     },
     GetStockMovements: async (t, { ingredientId, limit = 50 } = {}) => state.movements.filter((m) => m.tenantId === t && (!ingredientId || m.ingredientId === ingredientId)).sort((a, b) => b.at - a.at).slice(0, limit),
+    GetOrderByExternal: async (p, id) => state.orders.find((o) => o.external?.provider === p && o.external?.orderId === String(id)) || null,
+    GetIntegrationByStore: async (p, s) => (state.integrations ||= []).find((i) => i.provider === p && i.storeId === String(s)) || null,
+    GetIntegrationByTenant: async (p, t) => (state.integrations ||= []).find((i) => i.provider === p && i.tenantId === String(t)) || null,
+    SaveIntegration: async (p, t, d) => { const list = (state.integrations ||= []); let i = list.find((x) => x.provider === p && x.tenantId === String(t)); if (!i) { i = { provider: p, tenantId: String(t) }; list.push(i); } Object.assign(i, d); return i; },
+    DeleteIntegration: async (p, t) => { state.integrations = (state.integrations || []).filter((i) => !(i.provider === p && i.tenantId === String(t))); },
     GetOrderByClientRef: async (t, ref) => { const found = state.orders.find((o) => o.tenantId === t && o.clientRef === ref) || null; if (state.slowLookup) await new Promise((r) => setTimeout(r, 25)); return found; },
 
     NextCounter: async (t, key) => { const k = `${t}:${key}`; state.counters[k] = (state.counters[k] || 0) + 1; return state.counters[k]; },
     CreateOrder: async (d) => {
       // Igual que el índice único real: dos ventas con el mismo clientRef no pueden coexistir.
       if (d.clientRef && state.orders.some((o) => o.tenantId === d.tenantId && o.clientRef === d.clientRef)) { const e = new Error('E11000 duplicate key'); e.code = 11000; throw e; }
+      if (d.external?.orderId && state.orders.some((o) => o.external?.provider === d.external.provider && o.external?.orderId === d.external.orderId)) { const e = new Error('E11000 duplicate key'); e.code = 11000; throw e; }
       const o = { ...d, id: String(new ObjectId()) }; state.orders.push(o); return o;
     },
     GetInvites: async (t) => state.invites.filter((i) => i.tenantId === t),

@@ -1,0 +1,18 @@
+# Sesión 2026-11-16 (integración con Uber Eats)
+
+- **Qué se pidió:** recibir pedidos de Uber Eats directamente en el sistema. MiRestaurante es un punto de venta para varios comercios, así que es una sola aplicación de integrador (ISV) y cada negocio vincula su tienda. Contexto previo: [[MiRestaurante/Sesiones/2026-11-13 Pedidos a domicilio]] (origen del pedido y pago «Plataforma»).
+- **Qué se hizo:**
+  - `backend/services/uber.service.js`: cliente de la API (token `client_credentials` de 30 días en memoria; sandbox `sandbox-login.uber.com` + `test-api.uber.com`, producción `auth.uber.com` + `api.uber.com`), verificación de firma (`X-Uber-Signature` = HMAC-SHA256 hex del cuerpo exacto con el Client Secret), conversión de pedido de Uber a pedido de MiRestaurante y manejo de `orders.notification`, `orders.cancel` y `orders.failure`.
+  - `POST /integrations/uber/webhook` (público, protegido solo por la firma): 401 si no firma bien, 503 sin credenciales, 500 ante un fallo pasajero para que Uber reintente. Guardar es idempotente (consulta por pedido externo + índice único `external.provider/external.orderId`). `app.js` guarda `req.rawBody` solo para esa ruta.
+  - Vínculo de tienda: colección `integrations` (`provider`, `storeId`, `tenantId`; una tienda pertenece a un solo negocio). `GET/PUT/DELETE /integrations/uber` (solo administrador con rol fresco).
+  - `PUT /orders/:id/external/accept|deny` (admin y caja): aceptar exige caja abierta, avisa a Uber, cobra como `platform` en esa caja y manda el pedido a cocina; rechazar avisa a Uber con un motivo, cancela y devuelve inventario. Mientras `external.state` es `awaiting` no se puede cobrar ni cambiar de estado.
+  - Frontend: sección «Uber Eats» en Ajustes (Store ID, URL del webhook), tarjeta en Caja con cuenta regresiva de 11:30, «Aceptar pedido» y «Rechazar» (con motivo). Cocina no ve el pedido hasta aceptarlo y, como ya viene cobrado, ahora muestra los pedidos de plataforma (`inKitchen`).
+  - Variables nuevas en `.env.example`: `UBER_EATS_ENV`, `UBER_EATS_CLIENT_ID`, `UBER_EATS_CLIENT_SECRET` (y `UBER_EATS_AUTH_URL` / `UBER_EATS_API_URL` opcionales).
+- **Cómo se probó:** 222 pruebas del backend (14 nuevas en `tests/uber.test.js`, con Uber simulado); compila; en el navegador con una base temporal y un Uber falso local: vincular tienda en Ajustes, webhook con firma mala (401) y buena (200, sin duplicar al reintentar), tarjeta en Caja, aceptar (cobro $86.40 como «Plataforma», Cocina lo muestra) y rechazar.
+- **Pendiente / dudas:**
+  - **No probado contra Uber real.** Faltan las credenciales de pruebas en el `.env`, una URL pública para el webhook (túnel) y una tienda de prueba que da el soporte de integraciones de Uber.
+  - Los campos de importes de Uber (`payment.charges.sub_total/tax/total`, en centavos) y el detalle del pedido salen de la documentación leída por búsqueda; confirmar con un pedido real del sandbox. Cuando Uber cobra de más (propina, tarifas) el total guardado es el de Uber.
+  - La documentación de Uber se contradice en el dominio de login del sandbox (`sandbox-login` vs `sandbox-auth`) y en los reintentos del webhook; por eso hay `UBER_EATS_AUTH_URL`.
+  - Producción exige aprobación de Uber (acuerdo, licencia, gerente de socio). Hay un solo Client Secret por aplicación: es de la plataforma, no de cada comercio.
+  - Falta activar tiendas con el flujo de autorización de Uber (hoy el comercio pega su Store ID), devolver estados (preparando, listo) a Uber, sincronizar menú y precios, y Rappi y DiDi Food.
+  - El inventario solo se descuenta si el nombre del producto de Uber coincide con el del menú.

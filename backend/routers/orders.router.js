@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const orders = require('../controllers/orders.controller');
+const integrations = require('../controllers/integrations.controller');
 const { requireAuth, requireActiveSubscription, requireRoles } = require('../middleware/auth.middleware');
 
 router.get(
@@ -23,6 +24,9 @@ router.put(
   requireRoles('admin', 'cashier', 'kitchen', 'waiter'),
   orders.updateStatus
 );
+// Pedidos que llegan de Uber Eats: aceptar o rechazar (Uber espera respuesta en ~11 min)
+router.put('/:id/external/accept', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.acceptUberOrder);
+router.put('/:id/external/deny', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.denyUberOrder);
 router.put('/:id/pay', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), orders.pay);
 
 module.exports = router;

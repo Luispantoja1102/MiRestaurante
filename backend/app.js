@@ -16,7 +16,13 @@ app.use((req, _res, next) => {
   else if (req.url.startsWith('/api/')) req.url = req.url.slice(4) || '/';
   next();
 });
-app.use(bodyParser.json({ limit: '10mb' }));
+// El webhook de Uber se firma sobre el cuerpo exacto: se guarda el original para verificarlo
+app.use(bodyParser.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    if (req.url.startsWith('/integrations/uber/webhook')) req.rawBody = buf;
+  },
+}));
 app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 app.use(compression());
 let corsoptions = require('./configurations/cors.configuration');
@@ -47,6 +53,7 @@ app.use('/billing', require('./routers/billing.router'));
 app.use('/platform', require('./routers/platform.router'));
 app.use('/partner', require('./routers/partner.router'));
 app.use('/support', require('./routers/support.router'));
+app.use('/integrations', require('./routers/integrations.router'));
 
 if (!process.env.VERCEL) {
   server.listen(process.env.PORT, () => {

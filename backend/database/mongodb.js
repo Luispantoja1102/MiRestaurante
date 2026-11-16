@@ -90,6 +90,14 @@ async function ensureIndexes() {
       { tenantId: 1, clientRef: 1 },
       { unique: true, partialFilterExpression: { clientRef: { $type: 'string' } } }
     );
+    // Un pedido de una plataforma (Uber Eats…) tampoco puede entrar dos veces si el webhook se repite
+    await dbConnection.collection('orders').createIndex(
+      { 'external.provider': 1, 'external.orderId': 1 },
+      { unique: true, partialFilterExpression: { 'external.orderId': { $type: 'string' } } }
+    );
+    // Una tienda de la plataforma pertenece a un solo negocio
+    await dbConnection.collection('integrations').createIndex({ provider: 1, storeId: 1 }, { unique: true });
+    await dbConnection.collection('integrations').createIndex({ provider: 1, tenantId: 1 }, { unique: true });
     await dbConnection.collection('support_tickets').createIndex({ tenantId: 1, updatedAt: -1 });
     await dbConnection.collection('support_tickets').createIndex({ status: 1, updatedAt: -1 });
   } catch (err) {
@@ -720,6 +728,28 @@ async function GetOrderByClientRef(tenantId, clientRef) {
   if (!tenantId || !clientRef) return null;
   return withId(await dbConnection.collection('orders').findOne({ tenantId: String(tenantId), clientRef }));
 }
+async function GetOrderByExternal(provider, orderId) {
+  if (!provider || !orderId) return null;
+  return withId(await dbConnection.collection('orders').findOne({ 'external.provider': provider, 'external.orderId': String(orderId) }));
+}
+// Vínculo de un negocio con su tienda en una plataforma de reparto
+async function GetIntegrationByStore(provider, storeId) {
+  return dbConnection.collection('integrations').findOne({ provider, storeId: String(storeId) });
+}
+async function GetIntegrationByTenant(provider, tenantId) {
+  return dbConnection.collection('integrations').findOne({ provider, tenantId: String(tenantId) });
+}
+async function SaveIntegration(provider, tenantId, data) {
+  await dbConnection.collection('integrations').updateOne(
+    { provider, tenantId: String(tenantId) },
+    { $set: { ...data, provider, tenantId: String(tenantId), updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+    { upsert: true }
+  );
+  return GetIntegrationByTenant(provider, tenantId);
+}
+async function DeleteIntegration(provider, tenantId) {
+  await dbConnection.collection('integrations').deleteOne({ provider, tenantId: String(tenantId) });
+}
 // Contador atómico (p. ej. el turno del día en el mostrador). Devuelve el número que le tocó.
 async function NextCounter(tenantId, key) {
   const doc = await dbConnection
@@ -811,7 +841,8 @@ module.exports = {
   GetSettings, CreateSettings, UpdateSettings,
   GetMenus, GetMenuById, CreateMenu, UpdateMenu, DeleteMenu,
   GetFoods, GetFoodById, CreateFood, UpdateFood, DeleteFood,
-  GetOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, NextCounter,
+  GetOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, GetOrderByExternal, NextCounter,
+  GetIntegrationByStore, GetIntegrationByTenant, SaveIntegration, DeleteIntegration,
   GetInvites, GetInviteByToken, CreateInvite, UpdateInvite, DeleteInvite,
   GetOpenCashSession, GetCashSessionById, CreateCashSession, UpdateCashSession,
 };

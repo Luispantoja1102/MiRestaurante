@@ -122,6 +122,39 @@
           </ul>
         </section>
 
+        <!-- Uber Eats -->
+        <section v-else-if="section === 'integraciones'" class="panel">
+          <p class="hint">
+            Los pedidos de Uber Eats llegan solos a la pantalla de Caja. Tú los aceptas o rechazas ahí; si nadie responde en
+            unos 11 minutos, Uber los cancela.
+          </p>
+          <p v-if="uber.loaded && !uber.configured" class="err" role="alert">
+            El servidor todavía no tiene las credenciales de Uber Eats. Quien administra la plataforma debe configurarlas
+            antes de que lleguen pedidos.
+          </p>
+          <p v-else-if="uber.loaded" class="hint">
+            Conexión: <strong>{{ uber.environment === 'production' ? 'Producción' : 'Pruebas (sandbox)' }}</strong>
+          </p>
+
+          <form class="pass-form" @submit.prevent="linkUber">
+            <label>Store ID de tu tienda en Uber Eats
+              <input v-model.trim="uber.storeInput" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Pega aquí el Store ID" required />
+            </label>
+            <button type="submit" class="btn-primary" :disabled="uber.busy">{{ uber.storeId ? "Cambiar tienda" : "Vincular tienda" }}</button>
+          </form>
+          <p v-if="uber.storeId" class="ok" role="status">
+            Vinculada: <code>{{ uber.storeId }}</code>
+            <button type="button" class="link-btn" :disabled="uber.busy" @click="unlinkUber">Desvincular</button>
+          </p>
+
+          <div class="webhook-box">
+            <p class="hint">URL que Uber debe llamar (cópiala en el panel de desarrolladores de Uber, en Webhooks):</p>
+            <code class="webhook-url">{{ webhookUrl }}</code>
+            <p v-if="isLocal" class="hint">Estás en tu computadora: Uber necesita una dirección pública, por ejemplo con un túnel (ngrok o Cloudflare Tunnel) hacia el puerto 8081.</p>
+          </div>
+          <p v-if="uber.error" class="err" role="alert">{{ uber.error }}</p>
+        </section>
+
         <!-- Apariencia -->
         <section v-else-if="section === 'apariencia'" class="panel">
           <p class="hint">Paleta MiRestaurante fija (verde bosque + acento bronce). Solo eliges claro u oscuro.</p>
@@ -159,6 +192,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import FocusPicker from "../components/FocusPicker.vue";
+import axios from "axios";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
 import { saveVenueSettings, venueStore } from "../venueStore";
@@ -176,6 +210,7 @@ const ICONS = {
   mail: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>'),
   users: svg('<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0M16 5a3 3 0 010 6M21 20a6 6 0 00-4-5.6"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>'),
+  plug: svg('<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
   chat: svg('<path d="M4 5h16v11H9l-5 4V5z"/>'),
   logout: svg('<path d="M10 4H5v16h5M15 8l4 4-4 4M19 12H9"/>'),
@@ -187,6 +222,7 @@ const NAV = [
     items: [
       { id: "negocio", icon: "store", label: "Datos y logo", desc: "Nombre, dirección, logo y zona horaria", lead: "Así te ven tus clientes y tu equipo." },
       { id: "operacion", icon: "tune", label: "Cómo trabajas", desc: "Solo para llevar, con meseros o completo", lead: "Decide qué roles y pantallas tiene tu equipo." },
+      { id: "integraciones", icon: "plug", label: "Uber Eats", desc: "Recibe sus pedidos en Caja", lead: "Conecta tu tienda de Uber Eats." },
     ],
   },
   {
@@ -304,6 +340,53 @@ async function removeInvite(i) {
   await loadInvites();
 }
 
+// ——— Uber Eats ———
+const uber = reactive({ loaded: false, configured: false, environment: "sandbox", storeId: "", storeInput: "", busy: false, error: "" });
+const isLocal = typeof window !== "undefined" && window.location.hostname === "localhost";
+const webhookUrl = computed(() => {
+  const base = new URL(axios.defaults.baseURL || "/", window.location.origin);
+  return new URL("integrations/uber/webhook", base.href.endsWith("/") ? base.href : base.href + "/").href;
+});
+
+async function loadUber() {
+  try {
+    const s = await apiService.uberStatus();
+    Object.assign(uber, { loaded: true, configured: s.configured, environment: s.environment, storeId: s.storeId || "", storeInput: s.storeId || "" });
+  } catch {
+    uber.loaded = false;
+  }
+}
+
+async function linkUber() {
+  uber.busy = true;
+  uber.error = "";
+  try {
+    const s = await apiService.uberLink(uber.storeInput);
+    uber.storeId = s.storeId;
+    message.value = "Tienda de Uber Eats vinculada.";
+    messageIsError.value = false;
+  } catch (e) {
+    uber.error = e.response?.data || "No se pudo vincular la tienda.";
+  } finally {
+    uber.busy = false;
+  }
+}
+
+async function unlinkUber() {
+  if (!confirm("¿Dejar de recibir los pedidos de esta tienda de Uber Eats?")) return;
+  uber.busy = true;
+  uber.error = "";
+  try {
+    await apiService.uberUnlink();
+    uber.storeId = "";
+    uber.storeInput = "";
+  } catch (e) {
+    uber.error = e.response?.data || "No se pudo desvincular.";
+  } finally {
+    uber.busy = false;
+  }
+}
+
 // ——— Mi cuenta ———
 const pass = reactive({ current: "", next: "", again: "" });
 const changing = ref(false);
@@ -334,7 +417,10 @@ function logout() {
   router.push("/login");
 }
 
-onMounted(loadInvites);
+onMounted(() => {
+  loadInvites();
+  loadUber();
+});
 </script>
 
 <style scoped>
@@ -388,6 +474,9 @@ onMounted(loadInvites);
 label { display: grid; gap: 0.3rem; font-size: 0.85rem; font-weight: 500; }
 .inline-field { max-width: 14rem; }
 input, select { border: 1px solid var(--mirestaurante-line); border-radius: 0.65rem; padding: 0.65rem 0.75rem; font: inherit; background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); }
+.webhook-box { display: grid; gap: 0.4rem; }
+.webhook-url { display: block; padding: 0.6rem 0.75rem; border-radius: 0.6rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); font-size: 0.82rem; overflow-wrap: anywhere; user-select: all; }
+.link-btn { margin-left: 0.6rem; background: none; border: none; padding: 0; color: var(--mirestaurante-danger); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
 .btn-primary { justify-self: start; background: var(--mirestaurante-primary); color: var(--mirestaurante-on-primary); border: none; border-radius: 0.7rem; padding: 0.65rem 1.05rem; font-weight: 600; cursor: pointer; box-shadow: var(--mirestaurante-shadow); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
 .ok { color: var(--mirestaurante-success); font-size: 0.88rem; margin: 0; }

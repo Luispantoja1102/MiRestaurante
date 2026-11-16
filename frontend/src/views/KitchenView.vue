@@ -108,15 +108,22 @@ const columns = [
   { status: "ready", label: "Listos", next: "served", action: "ENTREGADO", tone: "tone-ready", btnClass: "success" },
 ];
 
+// Cocina ve lo que está por preparar. Un pedido de plataforma (Uber Eats) ya viene cobrado, pero se prepara igual;
+// mientras la plataforma espera respuesta, Cocina no lo ve.
+function inKitchen(o) {
+  if (o.external?.state === "awaiting") return false;
+  return o.paymentStatus !== "paid" || !!o.external;
+}
+
 function byStatus(status) {
   return orders.value
-    .filter((o) => o.status === status && o.paymentStatus !== "paid")
+    .filter((o) => o.status === status && inKitchen(o))
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 }
 
 const activeCount = computed(() =>
   orders.value.filter(
-    (o) => ["pending", "preparing", "ready"].includes(o.status) && o.paymentStatus !== "paid"
+    (o) => ["pending", "preparing", "ready"].includes(o.status) && inKitchen(o)
   ).length
 );
 
@@ -163,7 +170,7 @@ function toggleSound() {
 /** Comandas nuevas desde la última carga: se resaltan y, si hay sonido, suena. */
 function announceNew(list) {
   const pending = list
-    .filter((o) => o.status === "pending" && o.paymentStatus !== "paid")
+    .filter((o) => o.status === "pending" && inKitchen(o))
     .map((o) => o.id);
   if (primed) {
     const fresh = pending.filter((id) => !knownPending.has(id));

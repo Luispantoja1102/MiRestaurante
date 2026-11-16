@@ -301,6 +301,21 @@ export const apiService = {
   platformListReferrers() {
     return axios.get('/platform/referrers').then((r) => r.data);
   },
+  uberStatus() {
+    return axios.get('/integrations/uber').then((r) => r.data);
+  },
+  uberLink(storeId: string) {
+    return axios.put('/integrations/uber', { storeId }).then((r) => r.data);
+  },
+  uberUnlink() {
+    return axios.delete('/integrations/uber').then((r) => r.data);
+  },
+  acceptExternalOrder(orderId: string) {
+    return axios.put(`/orders/${orderId}/external/accept`).then((r) => r.data);
+  },
+  denyExternalOrder(orderId: string, code: string, explanation = '') {
+    return axios.put(`/orders/${orderId}/external/deny`, { code, explanation }).then((r) => r.data);
+  },
   changePassword(data: { currentPassword: string; newPassword: string }) {
     return axios.put('/usuarios/password', data).then((r) => r.data);
   },

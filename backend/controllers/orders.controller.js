@@ -6,6 +6,7 @@ const inventory = require('../services/inventory.service');
 const round2 = (n) => Number(Number(n).toFixed(2));
 const MAX_LINES = 50;
 const MAX_QTY = 99;
+const WAITING_MSG = 'Primero acepta o rechaza el pedido de la plataforma';
 
 // Día natural en la zona horaria del negocio (el turno del mostrador se reinicia cada día).
 function dayKey(timezone) {
@@ -108,6 +109,7 @@ async function updateStatus(req, res) {
     }
     const existing = await db.GetOrderById(req.params.id, req.tenantId);
     if (!existing) return res.status(404).send('Pedido no encontrado');
+    if (existing.external?.state === 'awaiting') return res.status(400).send(WAITING_MSG);
 
     const patch = { status, updatedAt: new Date() };
     if (status === 'cancelled' && existing.status !== 'cancelled') {
@@ -256,6 +258,8 @@ async function pay(req, res) {
 
     const existing = await db.GetOrderById(req.params.id, req.tenantId);
     if (!existing) return res.status(404).send('Pedido no encontrado');
+
+    if (existing.external?.state === 'awaiting') return res.status(400).send(WAITING_MSG);
 
     const platform = isPlatform(existing.channel);
     const method = platform ? 'platform' : req.body?.paymentMethod || 'cash';

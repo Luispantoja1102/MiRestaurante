@@ -61,6 +61,13 @@
               <span class="badge" :class="o.paymentStatus">{{ paymentText(o.paymentStatus) }}</span>
             </div>
           </div>
+          <div v-if="waiting(o)" class="awaiting" role="alert">
+            <p><strong>{{ channelLabel[o.channel] || 'La plataforma' }} espera tu respuesta</strong> · {{ remaining(o) }}</p>
+            <div class="awaiting-actions">
+              <button type="button" class="btn-primary" :disabled="!cashOpen || extBusy" :title="cashOpen ? '' : 'Abre la caja primero'" @click="acceptExternal(o)">Aceptar pedido</button>
+              <button type="button" :disabled="extBusy" @click="askDeny(o)">Rechazar</button>
+            </div>
+          </div>
           <p v-if="o.delivery" class="deliver">
             <strong>{{ o.delivery.name }}</strong><template v-if="o.delivery.phone"> · <a :href="`tel:${o.delivery.phone}`">{{ o.delivery.phone }}</a></template>
             <template v-if="o.delivery.address"><br />{{ o.delivery.address }}</template><template v-if="o.delivery.reference"> ({{ o.delivery.reference }})</template>
@@ -79,16 +86,16 @@
                 target="_blank"
               >Imprimir</router-link>
               <button
-                v-if="o.paymentStatus !== 'paid'"
+                v-if="o.paymentStatus !== 'paid' && !waiting(o)"
                 type="button"
                 class="btn-primary"
                 :disabled="!cashOpen"
                 :title="cashOpen ? '' : 'Abre la caja primero'"
                 @click="openPay(o)"
               >Cobrar</button>
-              <button v-if="o.status === 'pending'" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
+              <button v-if="o.status === 'pending' && !waiting(o)" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
               <button
-                v-if="o.modality === 'delivery' && !['served', 'cancelled'].includes(o.status)"
+                v-if="o.modality === 'delivery' && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
                 type="button"
                 @click="setStatus(o, 'served')"
               >Marcar entregado</button>
@@ -98,7 +105,23 @@
         <p v-if="!filtered.length" class="empty">No hay pedidos en este filtro.</p>
       </div>
 
+      <p v-if="extErr" class="err" role="alert">{{ extErr }}</p>
+
       <Teleport to="body">
+        <div v-if="denyTarget" class="modal-bg" @click.self="denyTarget = null">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="deny-title">
+            <h3 id="deny-title">Rechazar pedido</h3>
+            <label>Motivo (se lo decimos a {{ channelLabel[denyTarget.channel] || 'la plataforma' }})
+              <select v-model="denyCode">
+                <option v-for="r in DENY_REASONS" :key="r.code" :value="r.code">{{ r.label }}</option>
+              </select>
+            </label>
+            <div class="modal-actions">
+              <button type="button" @click="denyTarget = null">Volver</button>
+              <button type="button" class="btn-danger" :disabled="extBusy" @click="confirmDeny">Rechazar pedido</button>
+            </div>
+          </div>
+        </div>
         <div v-if="payOrder" class="modal-bg" @click.self="payOrder = null">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pay-title">
             <h3 id="pay-title">Cobrar {{ money(payOrder.total) }}</h3>
@@ -139,6 +162,64 @@ import {
 
 const router = useRouter();
 const orders = ref([]);
+
+// ——— Pedidos de una plataforma (Uber Eats) que esperan respuesta ———
+const DENY_REASONS = [
+  { code: "ITEM_AVAILABILITY", label: "Producto agotado" },
+  { code: "CAPACITY", label: "Mucho trabajo, no alcanzamos" },
+  { code: "STORE_CLOSED", label: "Estamos cerrados" },
+  { code: "OTHER", label: "Otro motivo" },
+];
+const now = ref(Date.now());
+const tick = setInterval(() => (now.value = Date.now()), 1000);
+const extBusy = ref(false);
+const extErr = ref("");
+const denyTarget = ref(null);
+const denyCode = ref("ITEM_AVAILABILITY");
+const waiting = (o) => o.external?.state === "awaiting";
+function remaining(o) {
+  const left = new Date(o.external?.deadline).getTime() - now.value;
+  if (!Number.isFinite(left)) return "";
+  if (left <= 0) return "el tiempo se agotó: Uber puede cancelarlo";
+  const s = Math.ceil(left / 1000);
+  return `quedan ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function replaceOrder(updated) {
+  const idx = orders.value.findIndex((x) => x.id === updated.id);
+  if (idx >= 0) orders.value[idx] = updated;
+}
+async function acceptExternal(o) {
+  extBusy.value = true;
+  extErr.value = "";
+  try {
+    replaceOrder(await apiService.acceptExternalOrder(o.id));
+    await loadCash();
+  } catch (e) {
+    extErr.value = e.response?.data || "No se pudo aceptar el pedido.";
+    await load();
+  } finally {
+    extBusy.value = false;
+  }
+}
+function askDeny(o) {
+  denyCode.value = "ITEM_AVAILABILITY";
+  denyTarget.value = o;
+}
+async function confirmDeny() {
+  extBusy.value = true;
+  extErr.value = "";
+  try {
+    const label = DENY_REASONS.find((r) => r.code === denyCode.value)?.label || "";
+    replaceOrder(await apiService.denyExternalOrder(denyTarget.value.id, denyCode.value, label));
+    denyTarget.value = null;
+  } catch (e) {
+    denyTarget.value = null;
+    extErr.value = e.response?.data || "No se pudo rechazar el pedido.";
+    await load();
+  } finally {
+    extBusy.value = false;
+  }
+}
 const filter = ref("open");
 const payOrder = ref(null);
 const payMethod = ref("cash");
@@ -289,7 +370,10 @@ onMounted(async () => {
   await live.ready;
   await load();
 });
-onUnmounted(() => live.stop());
+onUnmounted(() => {
+  live.stop();
+  clearInterval(tick);
+});
 </script>
 
 <style scoped>
@@ -424,6 +508,9 @@ onUnmounted(() => live.stop());
     padding: 1.4rem;
   }
 }
+.awaiting { margin: 0.5rem 0 0; padding: 0.7rem 0.85rem; border-radius: 0.8rem; border: 1.5px solid var(--mirestaurante-warning, #e8a020); background: color-mix(in srgb, var(--mirestaurante-warning, #e8a020) 12%, transparent); }
+.awaiting p { margin: 0 0 0.5rem; font-size: 0.9rem; }
+.awaiting-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .deliver { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--mirestaurante-muted); line-height: 1.4; }
 .deliver strong { color: var(--mirestaurante-ink); }
 </style>
