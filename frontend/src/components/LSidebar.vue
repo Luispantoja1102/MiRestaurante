@@ -42,17 +42,18 @@
 
     <div class="totals">
       <div><span>Subtotal</span><span>{{ money(subtotal) }}</span></div>
-      <div v-if="deliveryMethod === 'delivery'"><span>Reparto</span><span>{{ money(deliveryTax) }}</span></div>
+      <div v-if="deliveryMethod === 'delivery' && !platform"><span>Reparto</span><span>{{ money(deliveryTax) }}</span></div>
       <div><span>IVA (8%)</span><span>{{ money(subtotal * taxRate) }}</span></div>
       <div class="grand"><span>Total</span><span>{{ money(total) }}</span></div>
     </div>
 
+    <ChannelSelect v-if="!tableId" v-model="channel" />
     <div v-if="!tableId" class="modality" role="group" aria-label="Modalidad">
-      <button type="button" :aria-pressed="deliveryMethod === 'dine-in'" @click="setDeliveryMethod('dine-in')">En salón</button>
+      <button v-if="!platform" type="button" :aria-pressed="deliveryMethod === 'dine-in'" @click="setDeliveryMethod('dine-in')">En salón</button>
       <button type="button" :aria-pressed="deliveryMethod === 'takeaway'" @click="setDeliveryMethod('takeaway')">Para llevar</button>
       <button type="button" :aria-pressed="deliveryMethod === 'delivery'" @click="setDeliveryMethod('delivery')">A domicilio</button>
     </div>
-    <DeliveryFields v-if="!tableId && deliveryMethod === 'delivery'" :delivery="delivery" />
+    <DeliveryFields v-if="!tableId && deliveryMethod === 'delivery'" :delivery="delivery" :platform="platform" />
 
     <button type="button" class="send" :disabled="!store.platillosSeleccionados.length || sending" @click="finalizeOrder">
       {{ sending ? 'Enviando…' : tableName ? `Enviar a cocina · ${tableName}` : 'Enviar a cocina' }}
@@ -63,13 +64,15 @@
 
 <script>
 import { store } from "../store";
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { apiService } from "../apiService";
 import DeliveryFields from "./DeliveryFields.vue";
+import ChannelSelect from "./ChannelSelect.vue";
+import { isPlatformChannel } from "../labels";
 
 export default {
-  components: { DeliveryFields },
+  components: { DeliveryFields, ChannelSelect },
   props: {
     tableId: { type: String, default: "" },
     tableName: { type: String, default: "" },
@@ -78,6 +81,8 @@ export default {
   setup(props, { emit }) {
     const router = useRouter();
     const deliveryMethod = ref("dine-in");
+    const channel = ref("local");
+    const platform = computed(() => !props.tableId && isPlatformChannel(channel.value));
     const delivery = reactive({ name: "", phone: "", address: "", reference: "" });
     const deliveryTaxRate = 50;
     const taxRate = 0.08;
@@ -91,7 +96,7 @@ export default {
       store.platillosSeleccionados.reduce((sum, p) => sum + p.price * p.quantity, 0)
     );
     const deliveryTax = computed(() =>
-      deliveryMethod.value === "delivery" ? deliveryTaxRate : 0
+      deliveryMethod.value === "delivery" && !platform.value ? deliveryTaxRate : 0
     );
     const total = computed(() => subtotal.value + subtotal.value * taxRate + deliveryTax.value);
 
@@ -108,6 +113,10 @@ export default {
     const setDeliveryMethod = (method) => {
       deliveryMethod.value = method;
     };
+    // En una app de reparto el pedido nunca es «en salón»
+    watch(platform, (p) => {
+      if (p && deliveryMethod.value === "dine-in") deliveryMethod.value = "takeaway";
+    });
 
     const finalizeOrder = async () => {
       sending.value = true;
@@ -118,6 +127,7 @@ export default {
           tableId: props.tableId || null,
           tableName: props.tableName || { "dine-in": "Salón", takeaway: "Para llevar", delivery: "A domicilio" }[deliveryMethod.value],
           modality: props.tableId ? "dine-in" : deliveryMethod.value,
+          channel: props.tableId ? "local" : channel.value,
           delivery: !props.tableId && deliveryMethod.value === "delivery" ? { ...delivery } : undefined,
           items: store.platillosSeleccionados.map((p) => ({
             foodId: p.id,
@@ -130,6 +140,7 @@ export default {
         store.platillosSeleccionados.splice(0, store.platillosSeleccionados.length);
         Object.keys(noteOpen).forEach((k) => delete noteOpen[k]);
         Object.assign(delivery, { name: "", phone: "", address: "", reference: "" });
+        channel.value = "local";
         emit("sent");
         // Con mesa, el mesero vuelve al salón; sin mesa se queda para el siguiente pedido
         if (props.tableId) router.push("/main");
@@ -150,6 +161,8 @@ export default {
       count,
       deliveryMethod,
       delivery,
+      channel,
+      platform,
       subtotal,
       taxRate,
       deliveryTax,
@@ -250,7 +263,7 @@ h2 {
 .totals > div { display: flex; justify-content: space-between; }
 .grand { margin-top: 0.3rem; padding-top: 0.55rem; border-top: 1.5px solid var(--mirestaurante-ink); color: var(--mirestaurante-ink); font-weight: 700; font-size: 1.05rem; }
 
-.modality { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.2rem; padding: 0.2rem; border-radius: 0.8rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); }
+.modality { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 0.2rem; padding: 0.2rem; border-radius: 0.8rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); }
 .modality button {
   min-height: 2.6rem;
   border: none;

@@ -190,3 +190,50 @@ test('un pedido de salón a domicilio también exige datos y cobra envío', asyn
   const llevar = await api.call('POST', '/orders', { token: tokenFor('x', 'cashier', 't1'), body: { modality: 'takeaway', items } });
   assert.equal(llevar.json.deliveryFee, 0);
 });
+
+test('origen por defecto: local, y un origen inválido cae en local', async () => {
+  assert.equal((await sale({ items: [{ foodId: 'f-latte', quantity: 1 }] })).json.channel, 'local');
+  assert.equal((await sale({ channel: 'palomas', items: [{ foodId: 'f-latte', quantity: 1 }] })).json.channel, 'local');
+  const tel = await sale({ channel: 'phone', delivery: entrega, items: [{ foodId: 'f-latte', quantity: 1 }] });
+  assert.equal(tel.json.channel, 'phone');
+  assert.equal(tel.json.deliveryFee, 50);
+});
+
+test('app de reparto: sin envío, se cobra como Plataforma (no efectivo) y basta el nombre', async () => {
+  const r = await sale({ channel: 'uber', paymentMethod: 'cash', delivery: { name: 'Marta' }, items: [{ foodId: 'f-latte', quantity: 1 }] });
+  assert.equal(r.status, 201);
+  assert.equal(r.json.channel, 'uber');
+  assert.equal(r.json.paymentMethod, 'platform');
+  assert.equal(r.json.deliveryFee, 0);
+  assert.equal(r.json.total, 43.2);
+  assert.equal(r.json.amountReceived, undefined);
+  assert.equal(r.json.tableName, 'Uber Eats · Marta');
+  const sinDatos = await sale({ channel: 'rappi', items: [{ foodId: 'f-latte', quantity: 1 }] });
+  assert.equal(sinDatos.json.modality, 'takeaway');
+  assert.equal(sinDatos.json.tableName, 'Rappi · Pedido');
+});
+
+test('«Plataforma» solo vale para pedidos de una app de reparto', async () => {
+  assert.equal((await sale({ paymentMethod: 'platform', items: [{ foodId: 'f-latte', quantity: 1 }] })).status, 400);
+});
+
+test('el cierre de caja separa lo cobrado por plataforma del efectivo', async () => {
+  const caja = await api.call('GET', '/cash/session', { token: tokenFor('x', 'cashier', 't1') });
+  assert.ok(caja.json.totals.platform > 0);
+  const suma = (m) => Number(state.orders.filter((o) => o.paymentMethod === m && o.paymentStatus === 'paid' && o.tenantId === 't1').reduce((n, o) => n + o.total, 0).toFixed(2));
+  assert.equal(Number(caja.json.totals.platform.toFixed(2)), suma('platform'));
+  assert.equal(Number(caja.json.totals.cash.toFixed(2)), suma('cash'));
+});
+
+test('cobrar en Caja un pedido de app de reparto lo registra como Plataforma', async () => {
+  const items = [{ foodId: 'f-latte', name: 'Latte', price: 40, quantity: 1 }];
+  const tk = tokenFor('x', 'cashier', 't1');
+  const o = await api.call('POST', '/orders', { token: tk, body: { channel: 'didi', modality: 'takeaway', items } });
+  assert.equal(o.json.channel, 'didi');
+  const p = await api.call('PUT', `/orders/${o.json.id}/pay`, { token: tk, body: { paymentMethod: 'cash' } });
+  assert.equal(p.status, 200);
+  assert.equal(p.json.paymentMethod, 'platform');
+  const local = await api.call('POST', '/orders', { token: tk, body: { modality: 'takeaway', items } });
+  const bad = await api.call('PUT', `/orders/${local.json.id}/pay`, { token: tk, body: { paymentMethod: 'platform' } });
+  assert.equal(bad.status, 400);
+});

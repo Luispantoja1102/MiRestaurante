@@ -2,7 +2,7 @@ const db = require('../database/mongodb');
 const { normalizeCashSession } = require('../models/cashSession.model');
 
 function summarizeOrders(orders) {
-  const totals = { cash: 0, card: 0, transfer: 0, other: 0, total: 0, count: orders.length };
+  const totals = { cash: 0, card: 0, transfer: 0, platform: 0, other: 0, total: 0, count: orders.length };
   for (const o of orders) {
     if (o.paymentStatus !== 'paid') continue;
     const method = o.paymentMethod || 'other';
@@ -68,6 +68,7 @@ async function close(req, res) {
         expectedCash,
         expectedCard: totals.card,
         expectedTransfer: totals.transfer,
+        expectedPlatform: totals.platform,
         expectedOther: totals.other,
         expectedTotal: totals.total,
         difference,

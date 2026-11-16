@@ -27,6 +27,7 @@
         <p v-if="order.source === 'counter'">ATENCION....: MOSTRADOR{{ order.customerName ? ' · ' + order.customerName.toUpperCase() : '' }}</p>
         <p v-else>MESA........: {{ (order.tableName || 'SIN MESA').toUpperCase() }}</p>
         <p>SERVICIO....: {{ modalityText(order.modality).toUpperCase() }}</p>
+        <p v-if="order.channel && order.channel !== 'local'">ORIGEN......: {{ channelLabel[order.channel].toUpperCase() }}</p>
         <template v-if="order.delivery">
           <p>ENTREGA.....: {{ order.delivery.name.toUpperCase() }}</p>
           <p>TELEFONO....: {{ order.delivery.phone }}</p>
@@ -155,7 +156,7 @@ import { useRoute } from "vue-router";
 import { apiService } from "../apiService";
 import { venueStore, fetchVenueSettings } from "../venueStore";
 import { authStore } from "../authStore";
-import { labelOf, modalityLabel } from "../labels";
+import { channelLabel, labelOf, modalityLabel } from "../labels";
 
 const route = useRoute();
 const order = ref(null);
@@ -188,6 +189,7 @@ const payLabels = {
   cash: "EFECTIVO",
   card: "TARJETA",
   transfer: "TRANSFERENCIA",
+  platform: "PLATAFORMA",
   other: "OTRO",
 };
 

@@ -11,6 +11,7 @@ function normalizeCashSession(body = {}, tenantId, openedBy) {
     expectedCash: null,
     expectedCard: null,
     expectedTransfer: null,
+    expectedPlatform: null,
     expectedOther: null,
     expectedTotal: null,
     difference: null,

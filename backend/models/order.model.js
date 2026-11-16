@@ -1,12 +1,17 @@
 const crypto = require('crypto');
 
 const orderStatuses = ['pending', 'preparing', 'ready', 'served', 'cancelled'];
-const paymentMethods = ['cash', 'card', 'transfer', 'other'];
+const paymentMethods = ['cash', 'card', 'transfer', 'other', 'platform'];
+// De dónde llegó el pedido. En las apps de reparto la plataforma cobra al cliente y paga después al negocio.
+const channelLabels = { local: 'Local', phone: 'Teléfono', uber: 'Uber Eats', rappi: 'Rappi', didi: 'DiDi Food' };
+const channels = Object.keys(channelLabels);
+const PLATFORM_CHANNELS = ['uber', 'rappi', 'didi'];
+const isPlatform = (channel) => PLATFORM_CHANNELS.includes(channel);
 const modalities = ['dine-in', 'takeaway', 'delivery'];
 const DELIVERY_FEE = 50;
 
 // Datos de entrega de un pedido a domicilio. Devuelve { value } o { error }.
-function normalizeDelivery(raw) {
+function normalizeDelivery(raw, platform = false) {
   const clean = (v, max) => String(v ?? '').trim().slice(0, max);
   const value = {
     name: clean(raw?.name, 40),
@@ -15,8 +20,9 @@ function normalizeDelivery(raw) {
     reference: clean(raw?.reference, 80),
   };
   if (!value.name) return { error: 'Escribe el nombre de quien recibe' };
-  if (value.phone.replace(/\D/g, '').length < 7) return { error: 'Escribe un teléfono válido' };
-  if (value.address.length < 5) return { error: 'Escribe la dirección de entrega' };
+  // Las apps de reparto no siempre muestran teléfono y dirección: ahí solo hace falta el nombre
+  if (!platform && value.phone.replace(/\D/g, '').length < 7) return { error: 'Escribe un teléfono válido' };
+  if (!platform && value.address.length < 5) return { error: 'Escribe la dirección de entrega' };
   return { value };
 }
 
@@ -33,7 +39,9 @@ function normalizeOrder(body = {}) {
 
   const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
   const taxRate = 0.08;
-  const deliveryFee = body.modality === 'delivery' ? DELIVERY_FEE : 0;
+  const channel = channels.includes(body.channel) ? body.channel : 'local';
+  // El envío de una app de reparto lo cobra la plataforma, no el negocio
+  const deliveryFee = body.modality === 'delivery' && !isPlatform(channel) ? DELIVERY_FEE : 0;
   const tax = Number((subtotal * taxRate).toFixed(2));
   const total = Number((subtotal + tax + deliveryFee).toFixed(2));
 
@@ -41,6 +49,7 @@ function normalizeOrder(body = {}) {
     tableId: body.tableId || null,
     tableName: body.tableName || body.mesa || 'Sin mesa',
     items,
+    channel,
     modality: modalities.includes(body.modality) ? body.modality : 'dine-in',
     status: orderStatuses.includes(body.status) ? body.status : 'pending',
     paymentStatus: body.paymentStatus === 'paid' ? 'paid' : 'unpaid',
@@ -59,6 +68,9 @@ module.exports = {
   orderStatuses,
   paymentMethods,
   DELIVERY_FEE,
+  channels,
+  channelLabels,
+  isPlatform,
   normalizeDelivery,
   normalizeOrder,
   newToken: () => crypto.randomBytes(24).toString('hex'),

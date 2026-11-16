@@ -8,6 +8,16 @@ export const orderStatusLabel = {
   cancelled: "Cancelado",
 };
 
+export const channelLabel = {
+  local: "Local",
+  phone: "Teléfono",
+  uber: "Uber Eats",
+  rappi: "Rappi",
+  didi: "DiDi Food",
+};
+// Apps de reparto: la plataforma cobra al cliente y paga después al negocio
+export const isPlatformChannel = (c) => ["uber", "rappi", "didi"].includes(c);
+
 export const paymentStatusLabel = {
   unpaid: "Sin pagar",
   paid: "Pagado",

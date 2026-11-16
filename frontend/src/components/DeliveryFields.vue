@@ -3,10 +3,10 @@
     <label>Nombre de quien recibe
       <input v-model="d.name" type="text" maxlength="40" autocomplete="off" placeholder="Ana Pérez" />
     </label>
-    <label>Teléfono
+    <label>Teléfono <em v-if="platform">(opcional)</em>
       <input v-model="d.phone" type="tel" maxlength="20" inputmode="tel" autocomplete="off" placeholder="55 1234 5678" />
     </label>
-    <label>Dirección
+    <label>Dirección <em v-if="platform">(opcional)</em>
       <input v-model="d.address" type="text" maxlength="160" autocomplete="off" placeholder="Calle, número y colonia" />
     </label>
     <label>Referencia <em>(opcional)</em>
@@ -17,7 +17,7 @@
 
 <script setup>
 // Edita el objeto que le pasa quien lo usa (v-model:delivery no hace falta: es el mismo objeto reactivo)
-const props = defineProps({ delivery: { type: Object, required: true } });
+const props = defineProps({ delivery: { type: Object, required: true }, platform: Boolean });
 const d = props.delivery;
 </script>
 

@@ -54,7 +54,7 @@
           <div class="head">
             <div>
               <h3>{{ o.tableName || 'Sin mesa' }}</h3>
-              <p class="meta">{{ formatDate(o.createdAt) }} · {{ modalityText(o.modality) }}</p>
+              <p class="meta">{{ formatDate(o.createdAt) }} · {{ modalityText(o.modality) }}<template v-if="o.channel && o.channel !== 'local'"> · {{ channelLabel[o.channel] }}</template></p>
             </div>
             <div class="tags">
               <span class="badge" :class="`st-${o.status}`">{{ statusText(o.status) }}</span>
@@ -62,8 +62,8 @@
             </div>
           </div>
           <p v-if="o.delivery" class="deliver">
-            <strong>{{ o.delivery.name }}</strong> · <a :href="`tel:${o.delivery.phone}`">{{ o.delivery.phone }}</a><br />
-            {{ o.delivery.address }}<template v-if="o.delivery.reference"> ({{ o.delivery.reference }})</template>
+            <strong>{{ o.delivery.name }}</strong><template v-if="o.delivery.phone"> · <a :href="`tel:${o.delivery.phone}`">{{ o.delivery.phone }}</a></template>
+            <template v-if="o.delivery.address"><br />{{ o.delivery.address }}</template><template v-if="o.delivery.reference"> ({{ o.delivery.reference }})</template>
           </p>
           <ul class="items">
             <li v-for="(item, i) in o.items || []" :key="i">
@@ -102,7 +102,8 @@
         <div v-if="payOrder" class="modal-bg" @click.self="payOrder = null">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pay-title">
             <h3 id="pay-title">Cobrar {{ money(payOrder.total) }}</h3>
-            <label>Método de pago
+            <p v-if="isPlatformChannel(payOrder.channel)" class="deliver">Lo cobra {{ channelLabel[payOrder.channel] }}: se registra como «Plataforma».</p>
+            <label v-else>Método de pago
               <select v-model="payMethod">
                 <option value="cash">Efectivo</option>
                 <option value="card">Tarjeta</option>
@@ -128,6 +129,8 @@ import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
 import {
+  channelLabel,
+  isPlatformChannel,
   labelOf,
   modalityLabel,
   orderStatusLabel,

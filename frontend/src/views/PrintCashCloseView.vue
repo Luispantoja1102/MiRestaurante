@@ -37,6 +37,7 @@
         </div>
         <div class="row"><span>VENTAS TARJETA</span><span>$ {{ moneyPlain(session.expectedCard) }}</span></div>
         <div class="row"><span>TRANSFERENCIA</span><span>$ {{ moneyPlain(session.expectedTransfer) }}</span></div>
+        <div class="row"><span>PLATAFORMAS</span><span>$ {{ moneyPlain(session.expectedPlatform) }}</span></div>
         <div class="row"><span>OTROS</span><span>$ {{ moneyPlain(session.expectedOther) }}</span></div>
 
         <p class="sep">--------------------------------</p>
@@ -109,7 +110,7 @@ const typeLabel = computed(() => {
   return map[venueStore.businessType] || "RESTAURANTE";
 });
 
-const payMap = { cash: "EFEC", card: "TARJ", transfer: "TRANS", other: "OTRO" };
+const payMap = { cash: "EFEC", card: "TARJ", transfer: "TRANS", platform: "PLAT", other: "OTRO" };
 
 function moneyPlain(n) {
   return Number(n || 0).toFixed(2);

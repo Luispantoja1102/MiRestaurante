@@ -29,6 +29,7 @@ function createFakeDb() {
     UpdateSettings: async (d, t) => { state.settings[t] = { ...(state.settings[t] || {}), ...d }; return state.settings[t]; },
     CountUsersByTenant: async (t) => state.users.filter((u) => u.tenantId === t).length,
     GetOpenCashSession: async (t) => state.cash.find((c) => c.tenantId === t && c.status === 'open') || null,
+    GetOrdersByCashSession: async (sid, t) => state.orders.filter((o) => o.cashSessionId === sid && o.tenantId === t),
     GetFoods: async (t) => state.foods.filter((f) => f.tenantId === t),
     GetFoodById: async (id, t) => state.foods.find((f) => f.id === id && f.tenantId === t) || null,
     GetMenuById: async (id, t) => state.menus.find((m) => m.id === id && m.tenantId === t) || null,

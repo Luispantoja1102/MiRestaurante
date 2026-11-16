@@ -45,7 +45,7 @@
                 <p class="table">{{ o.tableName || 'Sin mesa' }}</p>
                 <span class="timer" :class="urgencyClass(o)">{{ ago(o.createdAt) }}</span>
               </div>
-              <p class="meta">{{ modalityText(o.modality) }}</p>
+              <p class="meta">{{ modalityText(o.modality) }}<template v-if="o.channel && o.channel !== 'local'"> · {{ channelLabel[o.channel] }}</template></p>
 
             <ul class="items">
               <li v-for="(item, i) in o.items || []" :key="i">
@@ -87,7 +87,7 @@ import { bindLive } from "../live";
 import { beep, resumeAudio } from "../sound";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
-import { labelOf, modalityLabel } from "../labels";
+import { channelLabel, labelOf, modalityLabel } from "../labels";
 
 const orders = ref([]);
 const loading = ref(false);

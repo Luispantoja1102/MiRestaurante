@@ -11,3 +11,11 @@
   - Sin repartidor asignado ni estado «en camino»: «Listo» pasa a «Servido» al entregar.
   - Arreglado después: el campo «Recibido» del cobro de mostrador tenía `step="0.5"` y el navegador rechazaba totales con centavos (p. ej. $93.20) al pagar en efectivo; ahora es `step="0.01"`.
   - Cobrar un pedido de salón a domicilio desde Caja lo marca «Servido» (así funciona `pay` para todos los pedidos).
+
+## Ampliación: origen del pedido (2026-11-16)
+- Cada pedido guarda `channel`: `local` (por defecto), `phone`, `uber`, `rappi` o `didi` (`channelLabels` en `backend/models/order.model.js`). Un valor desconocido cae en `local`.
+- Pedidos de una app de reparto (`isPlatform`): sin envío ($0, lo cobra la plataforma), basta el nombre del cliente, siempre «para llevar» o «a domicilio», y se cobran con el método nuevo `platform` («Plataforma»), que el servidor impone tanto en mostrador como en Caja. `platform` se rechaza en pedidos de otro origen.
+- Cierre de caja: `platform` suma aparte (no entra al efectivo esperado); se guarda `expectedPlatform` y el ticket de cierre muestra «PLATAFORMAS».
+- Frontend: `components/ChannelSelect.vue` (mostrador y carrito), origen visible en Caja, Cocina y ticket.
+- Pruebas: 208 en el backend (5 nuevas); el `helpers.js` de pruebas ahora simula `GetOrdersByCashSession`.
+- Sigue pendiente la integración real con Uber Eats, Rappi y DiDi (hoy el origen se elige a mano).

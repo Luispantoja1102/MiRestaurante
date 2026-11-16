@@ -1,5 +1,5 @@
 const db = require('../database/mongodb');
-const { normalizeOrder, normalizeDelivery, orderStatuses, paymentMethods } = require('../models/order.model');
+const { normalizeOrder, normalizeDelivery, orderStatuses, paymentMethods, channels, channelLabels, isPlatform } = require('../models/order.model');
 const inv = require('../models/inventory');
 const inventory = require('../services/inventory.service');
 
@@ -59,11 +59,11 @@ async function create(req, res) {
     const payload = normalizeOrder(body);
     payload.tenantId = req.tenantId;
     if (payload.modality === 'delivery') {
-      const d = normalizeDelivery(body.delivery);
+      const d = normalizeDelivery(body.delivery, isPlatform(payload.channel));
       if (d.error) return res.status(400).send(d.error);
       payload.delivery = d.value;
       payload.tableId = null;
-      payload.tableName = `Domicilio · ${d.value.name}`;
+      payload.tableName = `${isPlatform(payload.channel) ? channelLabels[payload.channel] : 'Domicilio'} · ${d.value.name}`;
     }
     if (!payload.items.length) {
       return res.status(400).send('El pedido necesita al menos un producto');
@@ -134,8 +134,13 @@ async function updateStatus(req, res) {
 async function counterSale(req, res) {
   try {
     const body = req.body || {};
-    const method = body.paymentMethod || 'cash';
-    if (!paymentMethods.includes(method)) return res.status(400).send('Método de pago inválido');
+    const channel = channels.includes(body.channel) ? body.channel : 'local';
+    const platform = isPlatform(channel);
+    // Una venta de app de reparto no entra como efectivo: la plataforma paga después
+    const method = platform ? 'platform' : body.paymentMethod || 'cash';
+    if (!paymentMethods.includes(method) || (method === 'platform' && !platform)) {
+      return res.status(400).send('Método de pago inválido');
+    }
 
     const session = await db.GetOpenCashSession(req.tenantId);
     if (!session) return res.status(400).send('Abre la caja antes de vender');
@@ -176,13 +181,13 @@ async function counterSale(req, res) {
 
     let delivery = null;
     if (body.delivery) {
-      const d = normalizeDelivery(body.delivery);
+      const d = normalizeDelivery(body.delivery, platform);
       if (d.error) return res.status(400).send(d.error);
       delivery = d.value;
     }
 
     // normalizeOrder calcula subtotal, IVA y total (con envío solo si es a domicilio).
-    const payload = normalizeOrder({ items, modality: delivery ? 'delivery' : 'dine-in' });
+    const payload = normalizeOrder({ items, modality: delivery ? 'delivery' : 'dine-in', channel });
     payload.items = items; // normalizeOrder solo conserva los campos básicos; aquí también van las opciones
     const customerName = String(body.customerName || '').trim().slice(0, 40);
     let received = null;
@@ -199,10 +204,10 @@ async function counterSale(req, res) {
     Object.assign(payload, {
       tenantId: req.tenantId,
       source: 'counter',
-      modality: delivery ? 'delivery' : body.takeaway ? 'takeaway' : 'dine-in',
+      modality: delivery ? 'delivery' : body.takeaway || platform ? 'takeaway' : 'dine-in',
       tableId: null,
       customerName: delivery ? delivery.name : customerName,
-      tableName: delivery ? `Domicilio · ${delivery.name}` : customerName ? `Mostrador · ${customerName}` : 'Mostrador',
+      tableName: platform ? `${channelLabels[channel]} · ${delivery?.name || customerName || 'Pedido'}` : delivery ? `Domicilio · ${delivery.name}` : customerName ? `Mostrador · ${customerName}` : 'Mostrador',
       // A domicilio se cobra al despachar pero queda «listo» hasta que se marque entregado
       status: delivery ? 'ready' : 'served',
       paymentStatus: 'paid',
@@ -244,11 +249,6 @@ async function counterSale(req, res) {
 
 async function pay(req, res) {
   try {
-    const method = req.body?.paymentMethod || 'cash';
-    if (!paymentMethods.includes(method)) {
-      return res.status(400).send('Método de pago inválido');
-    }
-
     const session = await db.GetOpenCashSession(req.tenantId);
     if (!session) {
       return res.status(400).send('Debes abrir la caja antes de cobrar');
@@ -256,6 +256,12 @@ async function pay(req, res) {
 
     const existing = await db.GetOrderById(req.params.id, req.tenantId);
     if (!existing) return res.status(404).send('Pedido no encontrado');
+
+    const platform = isPlatform(existing.channel);
+    const method = platform ? 'platform' : req.body?.paymentMethod || 'cash';
+    if (!paymentMethods.includes(method) || (method === 'platform' && !platform)) {
+      return res.status(400).send('Método de pago inválido');
+    }
     if (existing.paymentStatus === 'paid') {
       return res.status(400).send('El pedido ya está cobrado');
     }

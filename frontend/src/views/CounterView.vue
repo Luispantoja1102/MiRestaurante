@@ -114,16 +114,17 @@
             <p v-else class="empty-ticket">Toca un producto para agregarlo.</p>
 
             <div class="options">
+              <ChannelSelect v-model="channel" />
               <label v-if="where !== 'delivery'" class="field">
                 <span>Nombre <em>(opcional)</em></span>
                 <input v-model="customerName" type="text" maxlength="40" autocomplete="off" placeholder="Para llamarlo al entregar" />
               </label>
               <div class="where" role="group" aria-label="Dónde lo consume">
-                <button type="button" :aria-pressed="where === 'here'" @click="where = 'here'">Aquí</button>
+                <button v-if="!platform" type="button" :aria-pressed="where === 'here'" @click="where = 'here'">Aquí</button>
                 <button type="button" :aria-pressed="where === 'takeaway'" @click="where = 'takeaway'">Para llevar</button>
                 <button type="button" :aria-pressed="where === 'delivery'" @click="where = 'delivery'">A domicilio</button>
               </div>
-              <DeliveryFields v-if="where === 'delivery'" :delivery="delivery" />
+              <DeliveryFields v-if="where === 'delivery'" :delivery="delivery" :platform="platform" />
             </div>
 
             <div class="totals">
@@ -203,11 +204,12 @@
               <h3 id="pay-title">Cobrar</h3>
               <p class="pay-total">{{ money(totals.total) }}</p>
 
-              <div class="methods" role="group" aria-label="Método de pago">
+              <p v-if="platform" class="platform-note">Lo cobra {{ channelLabel[channel] }}: queda como «Plataforma» y no suma al efectivo de la caja.</p>
+              <div v-else class="methods" role="group" aria-label="Método de pago">
                 <button v-for="m in methods" :key="m.id" type="button" :aria-pressed="pay.method === m.id" @click="pay.method = m.id">{{ m.label }}</button>
               </div>
 
-              <div v-if="pay.method === 'cash'" class="cash-box">
+              <div v-if="!platform && pay.method === 'cash'" class="cash-box">
                 <div class="quick" role="group" aria-label="Billetes">
                   <button type="button" @click="pay.received = totals.total">Exacto</button>
                   <button v-for="b in bills" :key="b" type="button" @click="pay.received = b">{{ money(b) }}</button>
@@ -225,7 +227,7 @@
               <p v-if="pay.error" class="msg err" role="alert">{{ pay.error }}</p>
               <div class="modal-actions">
                 <button type="button" class="btn" @click="closePay">Cancelar</button>
-                <button type="submit" class="btn primary" :disabled="pay.busy || (pay.method === 'cash' && cashShort)">
+                <button type="submit" class="btn primary" :disabled="pay.busy || (!platform && pay.method === 'cash' && cashShort)">
                   {{ pay.busy ? 'Cobrando…' : 'Confirmar cobro' }}
                 </button>
               </div>
@@ -255,6 +257,8 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import AppShell from "../components/AppShell.vue";
 import DeliveryFields from "../components/DeliveryFields.vue";
+import ChannelSelect from "../components/ChannelSelect.vue";
+import { channelLabel, isPlatformChannel } from "../labels";
 import { apiService } from "../apiService";
 import { hasRole } from "../authStore";
 import { bindLive } from "../live";
@@ -274,7 +278,7 @@ const methods = [
   { id: "card", label: "Tarjeta" },
   { id: "transfer", label: "Transferencia" },
 ];
-const methodLabel = (id) => methods.find((m) => m.id === id)?.label || "Otro";
+const methodLabel = (id) => (id === "platform" ? "Plataforma" : methods.find((m) => m.id === id)?.label || "Otro");
 
 const isAdmin = hasRole("admin");
 const loading = ref(true);
@@ -299,6 +303,8 @@ const stockAlert = computed(() => {
 const noteOpen = reactive({});
 const customerName = ref("");
 const where = ref("here"); // here | takeaway | delivery
+const channel = ref("local"); // local | phone | uber | rappi | didi
+const platform = computed(() => isPlatformChannel(channel.value));
 const delivery = reactive({ name: "", phone: "", address: "", reference: "" });
 const sheetOpen = ref(false);
 
@@ -314,12 +320,19 @@ const itemCount = computed(() => lines.value.reduce((n, l) => n + l.quantity, 0)
 const totals = computed(() => {
   const subtotal = lines.value.reduce((sum, l) => sum + l.price * l.quantity, 0);
   const tax = round2(subtotal * TAX_RATE);
-  const shipping = where.value === "delivery" ? DELIVERY_FEE : 0;
+  const shipping = where.value === "delivery" && !platform.value ? DELIVERY_FEE : 0;
   return { subtotal: round2(subtotal), tax, shipping, total: round2(subtotal + tax + shipping) };
 });
 const deliveryMissing = computed(
-  () => where.value === "delivery" && (!delivery.name.trim() || delivery.phone.replace(/\D/g, "").length < 7 || delivery.address.trim().length < 5)
+  () =>
+    where.value === "delivery" &&
+    (!delivery.name.trim() ||
+      (!platform.value && (delivery.phone.replace(/\D/g, "").length < 7 || delivery.address.trim().length < 5)))
 );
+// En una app de reparto el pedido nunca es «aquí»
+watch(platform, (p) => {
+  if (p && where.value === "here") where.value = "takeaway";
+});
 const receivedNumber = computed(() => Number(pay.received) || 0);
 const cashShort = computed(() => receivedNumber.value + 1e-9 < totals.value.total);
 // Billetes redondos que cubren el total (los dos más cercanos y el siguiente)
@@ -357,6 +370,7 @@ function clearCart() {
   lines.value = [];
   customerName.value = "";
   where.value = "here";
+  channel.value = "local";
   Object.assign(delivery, { name: "", phone: "", address: "", reference: "" });
   Object.keys(noteOpen).forEach((k) => delete noteOpen[k]);
   sheetOpen.value = false;
@@ -464,7 +478,7 @@ async function openCash() {
 
 function openPay() {
   if (!lines.value.length || !cash.open) return;
-  Object.assign(pay, { open: true, done: false, busy: false, error: "", method: "cash", received: totals.value.total, order: null });
+  Object.assign(pay, { open: true, done: false, busy: false, error: "", method: platform.value ? "platform" : "cash", received: totals.value.total, order: null });
   pay.ref = pay.ref || newRef(); // se conserva si hubo un error: reintentar no duplica la venta
   sheetOpen.value = false;
 }
@@ -502,6 +516,7 @@ async function confirmPay() {
       paymentMethod: pay.method,
       amountReceived: pay.method === "cash" ? receivedNumber.value : undefined,
       customerName: customerName.value.trim(),
+      channel: channel.value,
       takeaway: where.value === "takeaway",
       delivery: where.value === "delivery" ? { ...delivery } : undefined,
       items: lines.value.map((l) => ({
@@ -617,7 +632,8 @@ onUnmounted(() => live.stop());
 .field { display: grid; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
 .field em { font-weight: 500; color: var(--mirestaurante-muted); font-style: normal; }
 .field input { min-height: 2.8rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.7rem; padding: 0 0.8rem; font: inherit; background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); min-width: 0; }
-.where { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+.platform-note { margin: 0; padding: 0.7rem 0.8rem; border-radius: 0.7rem; background: var(--mirestaurante-primary-soft); font-size: 0.88rem; }
+.where { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 0.4rem; }
 .where button { min-height: 2.6rem; border-radius: 0.7rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); font-weight: 700; cursor: pointer; }
 .where button[aria-pressed="true"] { background: var(--mirestaurante-primary-soft); border-color: var(--mirestaurante-primary); color: var(--mirestaurante-primary); }
 .totals { display: grid; gap: 0.3rem; font-size: 0.92rem; color: var(--mirestaurante-muted); }
