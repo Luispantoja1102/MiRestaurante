@@ -54,6 +54,7 @@ app.use('/platform', require('./routers/platform.router'));
 app.use('/partner', require('./routers/partner.router'));
 app.use('/support', require('./routers/support.router'));
 app.use('/integrations', require('./routers/integrations.router'));
+app.use('/point', require('./routers/point.router'));
 
 if (!process.env.VERCEL) {
   server.listen(process.env.PORT, () => {

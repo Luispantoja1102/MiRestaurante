@@ -209,6 +209,8 @@
                 <button v-for="m in methods" :key="m.id" type="button" :aria-pressed="pay.method === m.id" @click="pay.method = m.id">{{ m.label }}</button>
               </div>
 
+              <TerminalNote v-if="!platform && pay.method === 'card'" v-model:manual="pay.manualCard" :term="term" :waiting="waiting" @cancel="cancelTerminal" />
+
               <div v-if="!platform && pay.method === 'cash'" class="cash-box">
                 <div class="quick" role="group" aria-label="Billetes">
                   <button type="button" @click="pay.received = totals.total">Exacto</button>
@@ -258,6 +260,8 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import AppShell from "../components/AppShell.vue";
 import DeliveryFields from "../components/DeliveryFields.vue";
 import ChannelSelect from "../components/ChannelSelect.vue";
+import TerminalNote from "../components/TerminalNote.vue";
+import { usePointTerminal } from "../point";
 import { channelLabel, isPlatformChannel } from "../labels";
 import { apiService } from "../apiService";
 import { hasRole } from "../authStore";
@@ -311,7 +315,9 @@ const sheetOpen = ref(false);
 const cash = reactive({ loaded: false, open: false, busy: false, error: "", total: 0, count: 0 });
 const openingFloat = ref(0);
 
-const pay = reactive({ open: false, done: false, busy: false, error: "", method: "cash", received: 0, ref: "", order: null });
+const pay = reactive({ open: false, done: false, busy: false, error: "", method: "cash", received: 0, ref: "", order: null, manualCard: false });
+const { term, waiting, load: loadTerminal, charge: chargeOnTerminal, cancel: cancelTerminal } = usePointTerminal();
+const viaTerminal = computed(() => !platform.value && pay.method === "card" && term.ok && !pay.manualCard);
 const receivedInput = ref(null);
 const newSaleBtn = ref(null);
 
@@ -478,8 +484,9 @@ async function openCash() {
 
 function openPay() {
   if (!lines.value.length || !cash.open) return;
-  Object.assign(pay, { open: true, done: false, busy: false, error: "", method: platform.value ? "platform" : "cash", received: totals.value.total, order: null });
+  Object.assign(pay, { open: true, done: false, busy: false, error: "", method: platform.value ? "platform" : "cash", received: totals.value.total, order: null, manualCard: false });
   pay.ref = pay.ref || newRef(); // se conserva si hubo un error: reintentar no duplica la venta
+  loadTerminal();
   sheetOpen.value = false;
 }
 function closePay() {
@@ -511,9 +518,20 @@ async function confirmPay() {
   pay.busy = true;
   pay.error = "";
   try {
+    // Con terminal, primero se cobra ahí; la venta solo se registra si el cobro quedó aprobado
+    let pointChargeId;
+    if (viaTerminal.value) {
+      try {
+        pointChargeId = await chargeOnTerminal(pay.ref, totals.value.total);
+      } catch (e) {
+        pay.error = e.message;
+        return;
+      }
+    }
     const order = await apiService.counterSale({
       clientRef: pay.ref,
       paymentMethod: pay.method,
+      pointChargeId,
       amountReceived: pay.method === "cash" ? receivedNumber.value : undefined,
       customerName: customerName.value.trim(),
       channel: channel.value,

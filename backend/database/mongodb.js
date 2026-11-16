@@ -98,6 +98,9 @@ async function ensureIndexes() {
     // Una tienda de la plataforma pertenece a un solo negocio
     await dbConnection.collection('integrations').createIndex({ provider: 1, storeId: 1 }, { unique: true });
     await dbConnection.collection('integrations').createIndex({ provider: 1, tenantId: 1 }, { unique: true });
+    await dbConnection.collection('point_connections').createIndex({ tenantId: 1 }, { unique: true });
+    await dbConnection.collection('point_charges').createIndex({ tenantId: 1, clientSaleId: 1 });
+    await dbConnection.collection('point_charges').createIndex({ mpOrderId: 1 });
     await dbConnection.collection('support_tickets').createIndex({ tenantId: 1, updatedAt: -1 });
     await dbConnection.collection('support_tickets').createIndex({ status: 1, updatedAt: -1 });
   } catch (err) {
@@ -750,6 +753,61 @@ async function SaveIntegration(provider, tenantId, data) {
 async function DeleteIntegration(provider, tenantId) {
   await dbConnection.collection('integrations').deleteOne({ provider, tenantId: String(tenantId) });
 }
+// Terminal de cobro Mercado Pago Point: la conexión de cada negocio (tokens cifrados) y sus cobros
+async function GetPointConnection(tenantId) {
+  return dbConnection.collection('point_connections').findOne({ tenantId: String(tenantId) });
+}
+async function SavePointConnection(tenantId, data) {
+  await dbConnection.collection('point_connections').updateOne(
+    { tenantId: String(tenantId) },
+    { $set: { ...data, tenantId: String(tenantId), updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+    { upsert: true }
+  );
+  return GetPointConnection(tenantId);
+}
+async function DeletePointConnection(tenantId) {
+  await dbConnection.collection('point_connections').deleteOne({ tenantId: String(tenantId) });
+}
+async function CreatePointCharge(data) {
+  const result = await dbConnection.collection('point_charges').insertOne(data);
+  return withId(await dbConnection.collection('point_charges').findOne({ _id: result.insertedId }));
+}
+async function GetPointCharge(id, tenantId) {
+  const filter = oidFilter(id, tenantId);
+  return filter ? withId(await dbConnection.collection('point_charges').findOne(filter)) : null;
+}
+async function GetPointChargeBySale(clientSaleId, tenantId) {
+  return withId(await dbConnection.collection('point_charges').findOne({ tenantId: String(tenantId), clientSaleId: String(clientSaleId) }, { sort: { createdAt: -1 } }));
+}
+async function GetPointChargeByMpOrderId(mpOrderId) {
+  return withId(await dbConnection.collection('point_charges').findOne({ mpOrderId: String(mpOrderId) }));
+}
+async function ListPointChargesSince(tenantId, since) {
+  return (await dbConnection.collection('point_charges').find({ tenantId: String(tenantId), createdAt: { $gte: since } }).toArray()).map(withId);
+}
+async function UpdatePointCharge(id, data, tenantId) {
+  const filter = oidFilter(id, tenantId);
+  if (!filter) return null;
+  const clean = { ...data };
+  delete clean.id; delete clean._id;
+  await dbConnection.collection('point_charges').updateOne(filter, { $set: clean });
+  return GetPointCharge(id, tenantId);
+}
+// Un cobro aprobado se usa en UNA sola venta: reclamarlo es atómico
+async function ClaimPointCharge(id, tenantId, saleId) {
+  const filter = oidFilter(id, tenantId);
+  if (!filter) return null;
+  const r = await dbConnection.collection('point_charges').findOneAndUpdate(
+    { ...filter, status: 'paid', $or: [{ consumedBy: null }, { consumedBy: { $exists: false } }] },
+    { $set: { consumedBy: String(saleId), updatedAt: new Date() } },
+    { returnDocument: 'after' }
+  );
+  return withId(r?.ok !== undefined ? r.value : r);
+}
+async function ReleasePointCharge(id, tenantId, saleId) {
+  const filter = oidFilter(id, tenantId);
+  if (filter) await dbConnection.collection('point_charges').updateOne({ ...filter, consumedBy: String(saleId) }, { $set: { consumedBy: null, updatedAt: new Date() } });
+}
 // Contador atómico (p. ej. el turno del día en el mostrador). Devuelve el número que le tocó.
 async function NextCounter(tenantId, key) {
   const doc = await dbConnection
@@ -843,6 +901,8 @@ module.exports = {
   GetFoods, GetFoodById, CreateFood, UpdateFood, DeleteFood,
   GetOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, GetOrderByExternal, NextCounter,
   GetIntegrationByStore, GetIntegrationByTenant, SaveIntegration, DeleteIntegration,
+  GetPointConnection, SavePointConnection, DeletePointConnection,
+  CreatePointCharge, GetPointCharge, GetPointChargeBySale, GetPointChargeByMpOrderId, ListPointChargesSince, UpdatePointCharge, ClaimPointCharge, ReleasePointCharge,
   GetInvites, GetInviteByToken, CreateInvite, UpdateInvite, DeleteInvite,
   GetOpenCashSession, GetCashSessionById, CreateCashSession, UpdateCashSession,
 };

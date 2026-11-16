@@ -150,6 +150,39 @@
           <p v-if="uber.error" class="err" role="alert">{{ uber.error }}</p>
         </section>
 
+        <!-- Terminal de cobro -->
+        <section v-else-if="section === 'terminal'" class="panel">
+          <p class="hint">
+            Cobra con tarjeta en tu terminal Point de Mercado Pago: Caja le manda el monto y la venta solo se registra si el pago se
+            aprueba. Si usas otra terminal, «Tarjeta» sigue funcionando registrada a mano.
+          </p>
+          <p v-if="pt.loaded && !pt.available" class="err" role="alert">
+            El servidor todavía no tiene la conexión con Mercado Pago. Quien administra la plataforma debe configurarla.
+          </p>
+          <template v-else-if="pt.loaded">
+            <button v-if="!pt.connected" type="button" class="btn-primary" :disabled="pt.busy" @click="connectPoint">Conectar mi cuenta de Mercado Pago</button>
+            <template v-else>
+              <p class="ok" role="status">
+                Cuenta de Mercado Pago conectada.
+                <button type="button" class="link-btn" :disabled="pt.busy" @click="disconnectPoint">Desconectar</button>
+              </p>
+              <form class="pass-form" @submit.prevent="pickTerminal">
+                <label>Tu terminal
+                  <select v-model="pt.pick" required>
+                    <option value="" disabled>Elige tu terminal</option>
+                    <option v-for="t in pt.terminals" :key="t.id" :value="t.id">{{ t.external_pos_id || t.id }}</option>
+                  </select>
+                </label>
+                <button type="submit" class="btn-primary" :disabled="pt.busy || !pt.pick">{{ pt.terminalLabel ? "Cambiar terminal" : "Usar esta terminal" }}</button>
+              </form>
+              <p v-if="!pt.terminals.length" class="hint">No encontramos terminales en tu cuenta. Vincúlala primero desde la app de Mercado Pago.</p>
+              <p v-if="pt.ok" class="ok" role="status">Terminal lista: {{ pt.terminalLabel }}</p>
+              <p v-else-if="pt.terminalLabel" class="err" role="alert">{{ pt.message }}</p>
+            </template>
+          </template>
+          <p v-if="pt.error" class="err" role="alert">{{ pt.error }}</p>
+        </section>
+
         <!-- Apariencia -->
         <section v-else-if="section === 'apariencia'" class="panel">
           <p class="hint">Paleta MiRestaurante fija (verde bosque + acento bronce). Solo eliges claro u oscuro.</p>
@@ -184,7 +217,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import FocusPicker from "../components/FocusPicker.vue";
 import { apiService } from "../apiService";
@@ -195,6 +228,7 @@ import { inviteStatusLabel, labelOf, roleLabel } from "../labels";
 import { ROLE_DEFS, focusFor, focusInfo } from "../roles";
 
 const router = useRouter();
+const route = useRoute();
 
 // Íconos del menú (SVG fijos del propio código, mismo trazo que los de la barra inferior)
 const svg = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
@@ -205,6 +239,7 @@ const ICONS = {
   users: svg('<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0M16 5a3 3 0 010 6M21 20a6 6 0 00-4-5.6"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>'),
   plug: svg('<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>'),
+  card: svg('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h3"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
   chat: svg('<path d="M4 5h16v11H9l-5 4V5z"/>'),
   logout: svg('<path d="M10 4H5v16h5M15 8l4 4-4 4M19 12H9"/>'),
@@ -217,6 +252,7 @@ const NAV = [
       { id: "negocio", icon: "store", label: "Datos y logo", desc: "Nombre, dirección, logo y zona horaria", lead: "Así te ven tus clientes y tu equipo." },
       { id: "operacion", icon: "tune", label: "Cómo trabajas", desc: "Solo para llevar, con meseros o completo", lead: "Decide qué roles y pantallas tiene tu equipo." },
       { id: "integraciones", icon: "plug", label: "Uber Eats", desc: "Recibe sus pedidos en Caja", lead: "Conecta tu tienda de Uber Eats." },
+      { id: "terminal", icon: "card", label: "Terminal de cobro", desc: "Cobra con tarjeta en tu terminal Mercado Pago", lead: "Conecta tu cuenta y elige tu terminal Point." },
     ],
   },
   {
@@ -376,6 +412,63 @@ async function unlinkUber() {
   }
 }
 
+// ——— Terminal de cobro (Mercado Pago Point) ———
+const pt = reactive({ loaded: false, available: false, connected: false, ok: false, terminalLabel: "", message: "", terminals: [], pick: "", busy: false, error: "" });
+const MP_RETURN = {
+  cancelled: "Cancelaste la conexión con Mercado Pago.",
+  state: "El enlace de conexión caducó. Vuelve a intentarlo.",
+};
+
+async function loadPoint() {
+  try {
+    Object.assign(pt, await apiService.pointStatus(), { loaded: true });
+    pt.terminals = pt.connected ? await apiService.pointTerminals().catch(() => []) : [];
+  } catch {
+    pt.loaded = false;
+  }
+}
+
+async function connectPoint() {
+  pt.busy = true;
+  pt.error = "";
+  try {
+    window.location.href = (await apiService.pointConnect()).url;
+  } catch (e) {
+    pt.error = e.response?.data?.message || "No se pudo iniciar la conexión.";
+    pt.busy = false;
+  }
+}
+
+async function pickTerminal() {
+  pt.busy = true;
+  pt.error = "";
+  try {
+    await apiService.pointRegisterTerminal(pt.pick);
+    await loadPoint();
+    message.value = "Terminal lista para cobrar.";
+    messageIsError.value = false;
+  } catch (e) {
+    pt.error = e.response?.data?.message || "No se pudo usar esa terminal.";
+  } finally {
+    pt.busy = false;
+  }
+}
+
+async function disconnectPoint() {
+  if (!confirm("¿Desconectar tu cuenta de Mercado Pago? Las tarjetas se registrarán a mano.")) return;
+  pt.busy = true;
+  pt.error = "";
+  try {
+    await apiService.pointDisconnect();
+    pt.pick = "";
+    await loadPoint();
+  } catch (e) {
+    pt.error = e.response?.data?.message || "No se pudo desconectar.";
+  } finally {
+    pt.busy = false;
+  }
+}
+
 // ——— Mi cuenta ———
 const pass = reactive({ current: "", next: "", again: "" });
 const changing = ref(false);
@@ -406,9 +499,21 @@ function logout() {
   router.push("/login");
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadInvites();
   loadUber();
+  await loadPoint();
+  // Al volver de Mercado Pago se abre esta sección y se dice cómo salió
+  if (route.query.s === "terminal") {
+    open("terminal");
+    if (route.query.mp === "ok") {
+      message.value = "Cuenta de Mercado Pago conectada. Ahora elige tu terminal.";
+      messageIsError.value = false;
+    } else if (route.query.mp === "error") {
+      pt.error = MP_RETURN[route.query.reason] || "No se pudo conectar tu cuenta de Mercado Pago.";
+    }
+    router.replace({ query: {} });
+  }
 });
 </script>
 

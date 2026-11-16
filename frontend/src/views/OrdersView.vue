@@ -122,7 +122,7 @@
             </div>
           </div>
         </div>
-        <div v-if="payOrder" class="modal-bg" @click.self="payOrder = null">
+        <div v-if="payOrder" class="modal-bg" @click.self="!payBusy && (payOrder = null)">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pay-title">
             <h3 id="pay-title">Cobrar {{ money(payOrder.total) }}</h3>
             <p v-if="isPlatformChannel(payOrder.channel)" class="deliver">Lo cobra {{ channelLabel[payOrder.channel] }}: se registra como «Plataforma».</p>
@@ -134,9 +134,11 @@
                 <option value="other">Otro</option>
               </select>
             </label>
+            <TerminalNote v-if="!isPlatformChannel(payOrder.channel) && payMethod === 'card'" v-model:manual="payManual" :term="term" :waiting="waitingTerminal" @cancel="cancelTerminal" />
+            <p v-if="payErr" class="err" role="alert">{{ payErr }}</p>
             <div class="modal-actions">
-              <button type="button" @click="payOrder = null">Cancelar</button>
-              <button type="button" class="btn-primary" @click="confirmPay">Confirmar cobro</button>
+              <button type="button" :disabled="payBusy" @click="payOrder = null">Cancelar</button>
+              <button type="button" class="btn-primary" :disabled="payBusy" @click="confirmPay">{{ payBusy ? 'Cobrando…' : 'Confirmar cobro' }}</button>
             </div>
           </div>
         </div>
@@ -150,6 +152,8 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { bindLive } from "../live";
 import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
+import TerminalNote from "../components/TerminalNote.vue";
+import { usePointTerminal } from "../point";
 import { apiService } from "../apiService";
 import {
   channelLabel,
@@ -223,6 +227,10 @@ async function confirmDeny() {
 const filter = ref("open");
 const payOrder = ref(null);
 const payMethod = ref("cash");
+const payBusy = ref(false);
+const payErr = ref("");
+const payManual = ref(false); // «Ya cobré aparte»: tarjeta sin usar la terminal
+const { term, waiting: waitingTerminal, load: loadTerminal, charge: chargeOnTerminal, cancel: cancelTerminal } = usePointTerminal();
 
 const cashOpen = ref(false);
 const session = ref(null);
@@ -341,12 +349,27 @@ function openPay(o) {
   }
   payOrder.value = o;
   payMethod.value = "cash";
+  payManual.value = false;
+  payErr.value = "";
+  loadTerminal();
 }
 
 async function confirmPay() {
-  if (!payOrder.value) return;
+  if (!payOrder.value || payBusy.value) return;
+  payBusy.value = true;
+  payErr.value = "";
   try {
-    const updated = await apiService.payOrder(payOrder.value.id, payMethod.value);
+    // Con terminal, primero se cobra ahí; el pedido solo se marca cobrado si el cobro quedó aprobado
+    let pointChargeId;
+    if (!isPlatformChannel(payOrder.value.channel) && payMethod.value === "card" && term.ok && !payManual.value) {
+      try {
+        pointChargeId = await chargeOnTerminal(payOrder.value.id, payOrder.value.total);
+      } catch (e) {
+        payErr.value = e.message;
+        return;
+      }
+    }
+    const updated = await apiService.payOrder(payOrder.value.id, payMethod.value, pointChargeId);
     const idx = orders.value.findIndex((x) => x.id === updated.id);
     if (idx >= 0) orders.value[idx] = updated;
     const id = payOrder.value.id;
@@ -356,7 +379,9 @@ async function confirmPay() {
       window.open(`/print/order/${id}?mode=receipt&autoprint=1`, "_blank");
     }
   } catch (e) {
-    cashErr.value = e.response?.data || "No se pudo cobrar";
+    payErr.value = e.response?.data || "No se pudo cobrar";
+  } finally {
+    payBusy.value = false;
   }
 }
 

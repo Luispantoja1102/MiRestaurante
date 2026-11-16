@@ -2,6 +2,7 @@ const db = require('../database/mongodb');
 const { normalizeOrder, normalizeDelivery, orderStatuses, paymentMethods, channels, channelLabels, isPlatform } = require('../models/order.model');
 const inv = require('../models/inventory');
 const inventory = require('../services/inventory.service');
+const point = require('../services/point.service');
 
 const round2 = (n) => Number(Number(n).toFixed(2));
 const MAX_LINES = 50;
@@ -200,6 +201,18 @@ async function counterSale(req, res) {
       }
     }
 
+    // Cobro hecho en la terminal de Mercado Pago: debe estar aprobado, con este total y sin usarse antes
+    const chargeId = body.pointChargeId ? String(body.pointChargeId) : null;
+    if (chargeId) {
+      if (method !== 'card') return res.status(400).send('El cobro con terminal es solo para tarjeta');
+      try {
+        await point.consumeCharge(req.tenantId, chargeId, { saleId: clientRef || `charge-${chargeId}`, total: payload.total });
+      } catch (e) {
+        return res.status(e.status || 500).send(e.message);
+      }
+      payload.pointChargeId = chargeId;
+    }
+
     const settings = await db.GetSettings(req.tenantId);
     const now = new Date();
 
@@ -241,6 +254,8 @@ async function counterSale(req, res) {
         const existing = await db.GetOrderByClientRef(req.tenantId, clientRef);
         if (existing) return res.status(200).json(existing);
       }
+      // La venta no se guardó: el cobro queda libre para el reintento (no se cobra dos veces)
+      if (chargeId) await point.releaseCharge(req.tenantId, chargeId, clientRef || `charge-${chargeId}`).catch(() => {});
       throw err;
     }
   } catch (err) {
@@ -270,18 +285,35 @@ async function pay(req, res) {
       return res.status(400).send('El pedido ya está cobrado');
     }
 
-    const updated = await db.UpdateOrder(
-      req.params.id,
-      {
-        paymentStatus: 'paid',
-        paymentMethod: method,
-        status: existing.status === 'cancelled' ? existing.status : 'served',
-        paidAt: new Date(),
-        updatedAt: new Date(),
-        cashSessionId: session.id,
-      },
-      req.tenantId
-    );
+    const chargeId = req.body?.pointChargeId ? String(req.body.pointChargeId) : null;
+    if (chargeId) {
+      if (method !== 'card') return res.status(400).send('El cobro con terminal es solo para tarjeta');
+      try {
+        await point.consumeCharge(req.tenantId, chargeId, { saleId: existing.id, total: existing.total });
+      } catch (e) {
+        return res.status(e.status || 500).send(e.message);
+      }
+    }
+
+    let updated;
+    try {
+      updated = await db.UpdateOrder(
+        req.params.id,
+        {
+          paymentStatus: 'paid',
+          paymentMethod: method,
+          ...(chargeId ? { pointChargeId: chargeId } : {}),
+          status: existing.status === 'cancelled' ? existing.status : 'served',
+          paidAt: new Date(),
+          updatedAt: new Date(),
+          cashSessionId: session.id,
+        },
+        req.tenantId
+      );
+    } catch (err) {
+      if (chargeId) await point.releaseCharge(req.tenantId, chargeId, existing.id).catch(() => {});
+      throw err;
+    }
 
     if (existing.tableId) {
       try {

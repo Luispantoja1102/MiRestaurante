@@ -138,8 +138,8 @@ export const apiService = {
   updateOrderStatus(orderId: string, status: string) {
     return axios.put(`/orders/${orderId}/status`, { status }).then((r) => r.data);
   },
-  payOrder(orderId: string, paymentMethod: string) {
-    return axios.put(`/orders/${orderId}/pay`, { paymentMethod }).then((r) => r.data);
+  payOrder(orderId: string, paymentMethod: string, pointChargeId?: string) {
+    return axios.put(`/orders/${orderId}/pay`, { paymentMethod, pointChargeId }).then((r) => r.data);
   },
   editOrderAsCompleted(orderId: string) {
     return this.updateOrderStatus(orderId, 'served');
@@ -300,6 +300,30 @@ export const apiService = {
   },
   platformListReferrers() {
     return axios.get('/platform/referrers').then((r) => r.data);
+  },
+  pointStatus() {
+    return axios.get('/point/status').then((r) => r.data);
+  },
+  pointConnect() {
+    return axios.get('/point/connect').then((r) => r.data as { url: string });
+  },
+  pointDisconnect() {
+    return axios.delete('/point/connection');
+  },
+  pointTerminals() {
+    return axios.get('/point/terminals').then((r) => r.data as { id: string; external_pos_id?: string }[]);
+  },
+  pointRegisterTerminal(terminalId: string) {
+    return axios.post('/point/terminal', { terminalId }).then((r) => r.data);
+  },
+  pointStartCharge(clientSaleId: string, amount: number) {
+    return axios.post('/point/charges', { clientSaleId, amount }).then((r) => r.data);
+  },
+  pointCharge(id: string) {
+    return axios.get(`/point/charges/${id}`).then((r) => r.data);
+  },
+  pointCancelCharge(id: string) {
+    return axios.post(`/point/charges/${id}/cancel`).then((r) => r.data);
   },
   uberStatus() {
     return axios.get('/integrations/uber').then((r) => r.data);
