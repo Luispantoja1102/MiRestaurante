@@ -275,6 +275,8 @@ async function ingestOrder(storeId, orderId, { scheduled = false } = {}) {
     status: 'pending',
     paymentStatus: 'unpaid',
     paymentMethod: null,
+    // Los importes de un pedido de Uber son los que Uber calculó (el IVA va aparte): no son «precios con IVA incluido»
+    pricesWithTax: false,
     subtotal: m.subtotal,
     tax: m.tax,
     deliveryFee: 0,

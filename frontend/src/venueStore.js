@@ -15,6 +15,8 @@ const defaultSettings = {
   primaryColor: DEFAULT_PRIMARY,
   accentColor: DEFAULT_ACCENT,
   timezone: "America/Mexico_City",
+  // IVA de las ventas (0 a 1). Cada platillo dice si su precio ya lo incluye.
+  taxRate: 0.08,
   initialTables: 8,
   setupCompleted: false,
 };
@@ -55,6 +57,7 @@ watch(
       primaryColor: value.primaryColor,
       accentColor: value.accentColor,
       timezone: value.timezone,
+      taxRate: value.taxRate,
       initialTables: value.initialTables,
       setupCompleted: value.setupCompleted,
     };

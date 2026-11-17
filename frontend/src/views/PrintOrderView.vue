@@ -93,10 +93,11 @@
               </div>
 
               <hr class="tk-rule" />
-              <div class="tk-line">
+              <!-- Pedidos nuevos: el IVA ya va dentro del subtotal. Los de antes lo sumaban aparte. -->
+              <div v-if="!t.taxIncluded || t.deliveryFee" class="tk-line">
                 <span>Subtotal</span><i class="tk-dots"></i><span>{{ money(t.subtotal) }}</span>
               </div>
-              <div v-if="t.tax" class="tk-line">
+              <div v-if="!t.taxIncluded && t.tax" class="tk-line">
                 <span>{{ t.taxLabel }}</span><i class="tk-dots"></i><span>{{ money(t.tax) }}</span>
               </div>
               <div v-if="t.deliveryFee" class="tk-line">
@@ -107,6 +108,7 @@
                 <span>Total</span>
                 <strong>{{ money(t.total) }}</strong>
               </div>
+              <p v-if="t.taxIncluded" class="pr-ivanote">Incluye {{ t.taxLabel }}: {{ money(t.tax) }}</p>
 
               <!-- Propina sugerida: solo en cuentas de mesa sin cobrar -->
               <template v-if="t.tips.length && !paid">
@@ -255,5 +257,6 @@ onMounted(async () => {
 
 <style scoped>
 .pr-details { display: grid; gap: 0.8mm; margin-top: 2.4mm; font-size: 0.92em; }
+.pr-ivanote { text-align: right; font-size: 0.82em; margin-bottom: 1mm; }
 .pr-legal { font-size: 0.72em; opacity: 0.85; }
 </style>

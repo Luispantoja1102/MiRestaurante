@@ -40,7 +40,7 @@ test.before(async () => {
   state.users.push(
     { _id: new ObjectId(), name: 'Ana', lastName: 'D', username: 'ana', email: 'ana@t1.com', password: 'x', role: 'admin', tenantId: 't1' },
   );
-  state.foods.push({ id: 'f-latte', name: 'Latte', price: 40, tenantId: 't1' });
+  state.foods.push({ id: 'f-latte', name: 'Latte', price: 40, priceIncludesTax: false, tenantId: 't1' });
   state.cash.push({ id: 'c1', tenantId: 't1', status: 'open' });
 });
 test.after(async () => { await api.close(); global.fetch = realFetch; });

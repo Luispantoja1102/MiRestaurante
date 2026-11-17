@@ -537,7 +537,7 @@ test('el menú se traduce al formato de Uber: centavos, IVA aparte, extras y ago
   const now = 1_000_000_000_000;
   const { body, outIds } = uberMenuSvc.buildMenu({
     foods: [
-      { id: 'f1', name: 'Latte', price: 40.5, menuId: 'm1', description: 'Café', imgUrl: 'https://x.test/l.jpg', recipe: [{ ingredientId: 'leche', quantity: 200 }],
+      { id: 'f1', name: 'Latte', price: 40.5, priceIncludesTax: false, menuId: 'm1', description: 'Café', imgUrl: 'https://x.test/l.jpg', recipe: [{ ingredientId: 'leche', quantity: 200 }],
         extras: [{ ingredientId: 'sirope', label: 'Sirope', amount: 1, price: 8, max: 3 }, { ingredientId: 'azucar', label: 'Azúcar', amount: 1, price: 0, max: 2 }] },
       { id: 'f2', name: 'Pan', price: 35, menuId: 'm1', imgUrl: 'data:image/png;base64,AA' },
       { id: 'f3', name: 'Huérfano', price: 10, menuId: 'otra' },
@@ -549,7 +549,9 @@ test('el menú se traduce al formato de Uber: centavos, IVA aparte, extras y ago
   assert.deepEqual(body.categories.map((c) => c.id), ['m1'], 'sin categorías vacías ni productos sin categoría');
   const item = (id) => body.items.find((i) => i.id === id);
   assert.deepEqual(body.items.map((i) => i.id), ['f1', 'f1_sirope', 'f1_azucar', 'f2']);
-  assert.deepEqual([item('f1').price_info.price, item('f1').tax_info.tax_rate], [4050, 8], 'centavos y el IVA se suma');
+  assert.deepEqual([item('f1').price_info.price, item('f1').tax_info], [4050, { tax_rate: 8 }], 'centavos; con el IVA sin incluir, se suma');
+  assert.deepEqual(item('f2').tax_info, { vat_rate_percentage: 8 }, 'sin marca = el precio ya incluye el IVA');
+  assert.deepEqual(item('f1_sirope').tax_info, { tax_rate: 8 }, 'el extra lleva la marca de su platillo');
   assert.ok(item('f1').image_url && !item('f2').image_url, 'solo imágenes con dirección https');
   assert.equal(item('f1').description.translations.es_mx, 'Café');
   assert.deepEqual(item('f1').modifier_group_ids, { ids: ['f1_extras'] });

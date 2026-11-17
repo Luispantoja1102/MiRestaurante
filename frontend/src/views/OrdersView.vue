@@ -23,7 +23,7 @@
           </p>
           <div class="cash-actions">
             <label>Efectivo contado
-              <input v-model.number="countedCash" type="number" min="0" step="1" @input="countedDirty = true" />
+              <input v-model.number="countedCash" type="number" min="0" step="0.01" @input="countedDirty = true" />
             </label>
             <button type="button" class="btn-danger" :disabled="cashBusy" @click="closeCash">
               Cerrar caja
@@ -306,6 +306,7 @@ const session = ref(null);
 const cashTotals = ref({ cash: 0, card: 0, transfer: 0, other: 0, total: 0 });
 const openingFloat = ref(0);
 const countedCash = ref(0);
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 // Si el cajero ya tecleó el efectivo contado, una recarga automática no debe pisarlo
 const countedDirty = ref(false);
 const live = bindLive(["orders"], () => load(true));
@@ -357,9 +358,8 @@ async function loadCash(silent = false) {
     session.value = data.session;
     cashTotals.value = data.totals || { cash: 0, card: 0, transfer: 0, other: 0, total: 0 };
     if (data.session && !countedDirty.value) {
-      countedCash.value = Number(
-        (data.session.openingFloat || 0) + (data.totals?.cash || 0)
-      );
+      // A centavos: sumar decimales da cosas como 1285.199999999998
+      countedCash.value = round2((data.session.openingFloat || 0) + (data.totals?.cash || 0));
     }
     if (!data.session) countedDirty.value = false;
   } catch {
@@ -390,7 +390,7 @@ async function closeCash() {
   cashErr.value = "";
   cashMsg.value = "";
   try {
-    const res = await apiService.closeCashSession(Number(countedCash.value || 0));
+    const res = await apiService.closeCashSession(round2(countedCash.value));
     cashMsg.value = `Caja cerrada. Diferencia: ${money(res.session?.difference)}`;
     if (res.session?.id) {
       if (directPrinting()) printCashClose(res.session.id);

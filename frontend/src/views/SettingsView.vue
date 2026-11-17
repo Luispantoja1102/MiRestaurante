@@ -93,6 +93,30 @@
           <router-link to="/setup" class="link">Volver a ejecutar el asistente de configuración</router-link>
         </section>
 
+        <!-- Ventas e IVA -->
+        <section v-else-if="section === 'ventas'" class="panel tax-panel">
+          <h3>Tasa de IVA</h3>
+          <p class="hint">
+            Con ella se desglosa el IVA en cuentas, tickets y corte. Si el precio de un platillo ya lleva el IVA incluido o no, se decide al
+            registrar cada platillo.
+          </p>
+          <div class="pr-choices tax-choices">
+            <button v-for="t in TAXES" :key="t.value" type="button" class="pr-choice" :aria-pressed="taxChoice === t.value" @click="pickTax(t.value)">
+              <strong>{{ t.label }}</strong><small>{{ t.hint }}</small>
+            </button>
+          </div>
+          <label v-if="taxChoice === 'other'" class="inline-field">Otra tasa (%)
+            <input v-model.number="form.taxPercent" type="number" min="0" max="100" step="0.5" inputmode="decimal" />
+          </label>
+          <p v-if="taxError" class="err" role="alert">{{ taxError }}</p>
+          <div class="tax-example">
+            <span>Ejemplo con {{ Number((taxRate * 100).toFixed(2)) }}%</span>
+            <p>Un platillo de <b>{{ taxMoney(100) }}</b> que <b>ya incluye</b> el IVA se cobra en <b>{{ taxMoney(100) }}</b> y lleva <b>{{ taxMoney(100 - 100 / (1 + taxRate)) }}</b> de IVA dentro.</p>
+            <p>Uno de <b>{{ taxMoney(100) }}</b> que <b>no lo incluye</b> se cobra en <b>{{ taxMoney(100 * (1 + taxRate)) }}</b>.</p>
+          </div>
+          <button type="button" class="btn-primary" :disabled="saving || Boolean(taxError)" @click="saveBrand">{{ saving ? "Guardando…" : "Guardar" }}</button>
+        </section>
+
         <!-- Invitaciones -->
         <section v-else-if="section === 'equipo'" class="panel">
           <p class="hint">
@@ -350,6 +374,7 @@ import UberConnect from "../components/UberConnect.vue";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
 import { saveVenueSettings, venueStore } from "../venueStore";
+import { rateOf } from "../tax";
 import { DEFAULT_ACCENT, DEFAULT_PRIMARY, applyBrand } from "../brandTheme";
 import LogoPicker from "../components/LogoPicker.vue";
 import { themeStore, applyUiTheme } from "../themeStore";
@@ -372,6 +397,7 @@ const ICONS = {
   plug: svg('<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>'),
   printer: svg('<path d="M7 9V4h10v5"/><path d="M7 17H5a1 1 0 01-1-1v-5a2 2 0 012-2h12a2 2 0 012 2v5a1 1 0 01-1 1h-2"/><path d="M7 14h10v6H7z"/>'),
   card: svg('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h3"/>'),
+  percent: svg('<path d="M19 5L5 19"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
   chat: svg('<path d="M4 5h16v11H9l-5 4V5z"/>'),
   logout: svg('<path d="M10 4H5v16h5M15 8l4 4-4 4M19 12H9"/>'),
@@ -383,6 +409,7 @@ const NAV = [
     items: [
       { id: "negocio", icon: "store", label: "Datos y logo", desc: "Nombre, dirección, logo y zona horaria", lead: "Así te ven tus clientes y tu equipo." },
       { id: "operacion", icon: "tune", label: "Cómo trabajas", desc: "Solo para llevar, con meseros o completo", lead: "Decide qué roles y pantallas tiene tu equipo." },
+      { id: "ventas", icon: "percent", label: "Ventas e IVA", desc: "La tasa de IVA de tus ventas", lead: "El impuesto de tus ventas. Cada platillo dice si su precio ya lo incluye." },
       { id: "integraciones", icon: "plug", label: "Uber Eats", desc: "Recibe sus pedidos en Caja", lead: "Conecta tu tienda de Uber Eats." },
       { id: "terminal", icon: "card", label: "Terminal de cobro", desc: "Cobra con tarjeta en tu terminal Mercado Pago", lead: "Conecta tu cuenta y elige tu terminal Point." },
     ],
@@ -436,7 +463,33 @@ const form = reactive({
   accentColor: venueStore.accentColor || DEFAULT_ACCENT,
   timezone: venueStore.timezone || "America/Mexico_City",
   initialTables: venueStore.initialTables || 8,
+  // IVA en por ciento para el formulario; al guardar se manda como 0 a 1
+  taxPercent: Number((rateOf(venueStore.taxRate) * 100).toFixed(2)),
 });
+
+// ——— Ventas e IVA ———
+const TAXES = [
+  { value: "8", label: "8%", hint: "Zona fronteriza" },
+  { value: "16", label: "16%", hint: "Tasa general" },
+  { value: "0", label: "0%", hint: "Sin IVA" },
+  { value: "other", label: "Otra", hint: "Escribe la tasa" },
+];
+const taxChoice = ref("other");
+const syncTaxChoice = () => {
+  const v = String(Number(form.taxPercent));
+  taxChoice.value = ["8", "16", "0"].includes(v) ? v : "other";
+};
+syncTaxChoice();
+function pickTax(value) {
+  taxChoice.value = value;
+  if (value !== "other") form.taxPercent = Number(value);
+}
+const taxRate = computed(() => Math.min(100, Math.max(0, Number(form.taxPercent) || 0)) / 100);
+const taxError = computed(() => {
+  const v = Number(form.taxPercent);
+  return !Number.isFinite(v) || v < 0 || v > 100 ? "La tasa va de 0 a 100%." : "";
+});
+const taxMoney = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 const hasTables = computed(() => focusInfo(form.serviceFocus).mode !== "counter");
 
 const saving = ref(false);
@@ -451,7 +504,9 @@ async function saveBrand() {
   message.value = "";
   messageIsError.value = false;
   try {
-    await saveVenueSettings({ ...form });
+    if (taxError.value) throw new Error(taxError.value);
+    const { taxPercent, ...rest } = form;
+    await saveVenueSettings({ ...rest, taxRate: taxRate.value });
     message.value = "Configuración guardada.";
   } catch (e) {
     // El servidor puede rechazar el cambio con una razón clara (p. ej. el equipo no cabe en el nuevo enfoque)
@@ -834,6 +889,14 @@ input, select { border: 1px solid var(--mirestaurante-line); border-radius: 0.65
 .ok { color: var(--mirestaurante-success); font-size: 0.88rem; margin: 0; }
 .err { color: var(--mirestaurante-danger); font-size: 0.88rem; margin: 0; }
 .pass-form { display: grid; gap: 0.7rem; max-width: 24rem; }
+.tax-panel { display: grid; gap: 0.9rem; }
+.tax-panel h3 { margin: 0; font-size: 1.02rem; font-weight: 800; }
+.tax-choices { grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); }
+.tax-choices .pr-choice { justify-items: center; text-align: center; }
+.tax-choices .pr-choice strong { font-size: 1.15rem; }
+.tax-example { display: grid; gap: 0.3rem; padding: 0.8rem 0.9rem; border-radius: 0.9rem; background: var(--mirestaurante-primary-soft); font-size: 0.9rem; }
+.tax-example span { font-size: 0.72rem; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mirestaurante-muted); }
+.tax-example p { margin: 0; }
 .pr-card { display: grid; gap: 0.85rem; }
 .pr-card h3 { margin: 0; font-size: 1.02rem; font-weight: 800; }
 .pr-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.6rem; }

@@ -17,6 +17,8 @@ const settingsSchema = Joi.object({
     .pattern(/^#([0-9A-Fa-f]{6})$/)
     .default('#E8A020'),
   timezone: Joi.string().default('America/Mexico_City'),
+  // Tasa de IVA de las ventas (0 a 1). Cada platillo dice si su precio ya la incluye.
+  taxRate: Joi.number().min(0).max(1).optional().messages({ 'number.base': 'La tasa de IVA debe ser un número', 'number.min': 'La tasa de IVA va de 0 a 100 %', 'number.max': 'La tasa de IVA va de 0 a 100 %' }),
   initialTables: Joi.number().integer().min(0).max(100).default(0),
   setupCompleted: Joi.boolean().default(true),
   updatedAt: Joi.date().optional(),

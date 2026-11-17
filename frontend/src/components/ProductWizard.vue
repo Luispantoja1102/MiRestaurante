@@ -20,6 +20,18 @@
           <p class="lead">Lo básico: cómo se llama y cuánto cuesta.</p>
           <label>Nombre<input v-model="form.name" required maxlength="80" autocomplete="off" placeholder="Ej. Latte, Pan de elote" /></label>
           <label>Precio base <em>(sin extras)</em><input v-model.number="form.price" type="number" inputmode="decimal" min="0" step="0.5" required /></label>
+          <div class="iva-choice" role="radiogroup" aria-label="¿Este precio ya incluye IVA?">
+            <p class="iva-q">¿Este precio ya incluye IVA?</p>
+            <label class="iva-card" :class="{ on: form.priceIncludesTax }">
+              <input v-model="form.priceIncludesTax" type="radio" :value="true" />
+              <span><strong>Sí, ya lo incluye</strong><small>El cliente paga este precio</small></span>
+            </label>
+            <label class="iva-card" :class="{ on: !form.priceIncludesTax }">
+              <input v-model="form.priceIncludesTax" type="radio" :value="false" />
+              <span><strong>No, hay que sumarle IVA</strong><small>Al cobrar se agrega el {{ taxPercent }}%</small></span>
+            </label>
+            <p class="price-preview">El cliente paga {{ money(customerPrice) }}<template v-if="form.priceIncludesTax && ivaInside > 0"> · incluye {{ money(ivaInside) }} de IVA ({{ taxPercent }}%)</template></p>
+          </div>
           <label>Descripción <em>(opcional)</em><input v-model="form.description" maxlength="300" autocomplete="off" /></label>
           <label>Imagen <em>(opcional, URL)</em><input v-model="form.imgUrl" type="url" placeholder="https://…" autocomplete="off" /></label>
           <div v-if="form.imgUrl" class="preview"><img :src="form.imgUrl" alt="Vista previa" /></div>
@@ -91,7 +103,8 @@
         <section v-show="step === 4" class="pane">
           <p class="lead">Revisa cómo quedará.</p>
           <div class="sum-card">
-            <div class="sum-top"><strong>{{ form.name || 'Sin nombre' }}</strong><span>{{ money(form.price) }}</span></div>
+            <div class="sum-top"><strong>{{ form.name || 'Sin nombre' }}</strong><span>{{ money(customerPrice) }}</span></div>
+            <p class="hint">{{ form.priceIncludesTax ? 'IVA incluido en el precio' : `Precio sin IVA: al cobrar se suma el ${taxPercent}%` }}</p>
             <p v-if="form.description" class="hint">{{ form.description }}</p>
             <h4>Receta</h4>
             <ul v-if="recipe.length" class="plain"><li v-for="l in recipe" :key="l.ingredientId">{{ nameOf(l.ingredientId) }} · {{ qtyWithUnit(l.quantity, unitKey(l.ingredientId)) }}</li></ul>
@@ -144,6 +157,8 @@ import { computed, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 import { UNIT_OPTIONS, qtyWithUnit, unitShort } from "../inventoryUnits";
 import { consumptionFor, priceWithExtras, round2 } from "../recipeMath";
+import { venueStore } from "../venueStore";
+import { includesTax, lineBreakdown, rateOf } from "../tax";
 
 const props = defineProps({
   food: { type: Object, default: null }, // null = producto nuevo
@@ -169,7 +184,16 @@ const form = reactive({
   price: props.food?.price ?? 0,
   description: props.food?.description || "",
   imgUrl: props.food?.imgUrl || "",
+  // Un producto nuevo (y los de antes) trae el IVA incluido: el precio del menú es lo que paga el cliente
+  priceIncludesTax: props.food ? includesTax(props.food.priceIncludesTax) : true,
 });
+
+// Lo que paga el cliente por una pieza (sin extras) y el IVA que lleva dentro, con la tasa del negocio
+const taxRate = computed(() => rateOf(venueStore.taxRate));
+const taxPercent = computed(() => Number((taxRate.value * 100).toFixed(2)));
+const line = computed(() => lineBreakdown(Number(form.price) || 0, 1, form.priceIncludesTax, taxRate.value));
+const customerPrice = computed(() => line.value.unitGross);
+const ivaInside = computed(() => round2(line.value.tax));
 const recipe = ref((props.food?.recipe || []).map((l) => ({ ingredientId: String(l.ingredientId), quantity: l.quantity })));
 const extras = ref(
   (props.food?.extras || []).map((e) => ({ ingredientId: String(e.ingredientId), label: e.label || "", amount: e.amount, price: e.price, max: e.max }))
@@ -220,7 +244,9 @@ const example = computed(() => {
   const { options, unitPrice } = priceWithExtras(food, picks);
   const uses = [...consumptionFor(food, options, 1)].map(([id, n]) => qtyWithUnit(n, unitKey(id)) + " de " + nameOf(id));
   const withExtras = options.length ? ` con ${options.map((o) => `${o.quantity} ${o.label}`).join(" y ")}` : "";
-  return { title: `1 ${form.name || "producto"}${withExtras}`, price: round2(unitPrice), uses: uses.join(", ") || "nada" };
+  // Lo que paga el cliente: con el IVA que se suma si el precio no lo incluye
+  const cobrado = lineBreakdown(unitPrice, 1, form.priceIncludesTax, taxRate.value).unitGross;
+  return { title: `1 ${form.name || "producto"}${withExtras}`, price: cobrado, uses: uses.join(", ") || "nada" };
 });
 
 function go(n) {
@@ -260,6 +286,7 @@ async function save() {
     const payload = {
       name: form.name.trim(),
       price: Number(form.price),
+      priceIncludesTax: form.priceIncludesTax,
       description: form.description,
       imgUrl: (form.imgUrl || "").trim(),
       menuId: props.menuId,
@@ -310,6 +337,17 @@ async function remove() {
 .pane label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; font-size: 0.86rem; font-weight: 600; min-width: 0; }
 .pane label em { font-weight: 500; color: var(--mirestaurante-muted); font-style: normal; }
 .pane input, .pane select, .inline input, .inline select { min-height: 2.9rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.7rem; padding: 0.5rem 0.75rem; font: inherit; background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); width: 100%; box-sizing: border-box; min-width: 0; }
+/* ¿El precio ya incluye IVA? Dos tarjetas que se eligen con un toque */
+.iva-choice { display: grid; gap: 0.5rem; }
+.iva-q { margin: 0; font-size: 0.86rem; font-weight: 700; }
+.pane .iva-card { position: relative; display: block; padding: 0.7rem 0.85rem; border: 1.5px solid var(--mirestaurante-line); border-radius: 0.8rem; cursor: pointer; background: var(--mirestaurante-panel-elevated); }
+.pane .iva-card input { position: absolute; opacity: 0; width: 1px; min-height: 0; height: 1px; }
+.iva-card span { display: grid; gap: 0.1rem; }
+.iva-card strong { font-size: 0.92rem; }
+.iva-card small { color: var(--mirestaurante-muted); font-size: 0.8rem; font-weight: 500; }
+.iva-card.on { border-color: var(--mirestaurante-primary); background: var(--mirestaurante-primary-soft); }
+.iva-card:focus-within { outline: 3px solid color-mix(in srgb, var(--mirestaurante-primary) 40%, transparent); outline-offset: 2px; }
+.price-preview { margin: 0; font-size: 0.9rem; font-weight: 700; }
 .preview { border-radius: 0.8rem; overflow: hidden; max-height: 9rem; background: var(--mirestaurante-surface); }
 .preview img { width: 100%; max-height: 9rem; object-fit: cover; display: block; }
 

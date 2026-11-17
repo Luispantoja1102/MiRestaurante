@@ -11,7 +11,7 @@
         <div class="line-main">
           <div class="line-copy">
             <p class="name">{{ producto.name }}</p>
-            <p class="unit">{{ money(producto.price) }} c/u</p>
+            <p class="unit">{{ money(unitGross(producto.price, producto.priceIncludesTax)) }} c/u</p>
           </div>
           <div class="qty">
             <button
@@ -22,7 +22,7 @@
             <span>{{ producto.quantity }}</span>
             <button type="button" :aria-label="`Agregar uno de ${producto.name}`" @click="incrementarCantidad(index)">+</button>
           </div>
-          <p class="line-total">{{ money(producto.price * producto.quantity) }}</p>
+          <p class="line-total">{{ money(lineGross(producto.price, producto.quantity, producto.priceIncludesTax)) }}</p>
         </div>
         <input
           v-if="noteOpen[index] || producto.notes"
@@ -43,8 +43,8 @@
     <div class="totals">
       <div><span>Subtotal</span><span>{{ money(subtotal) }}</span></div>
       <div v-if="deliveryMethod === 'delivery' && !platform"><span>Reparto</span><span>{{ money(deliveryTax) }}</span></div>
-      <div><span>IVA (8%)</span><span>{{ money(subtotal * taxRate) }}</span></div>
       <div class="grand"><span>Total</span><span>{{ money(total) }}</span></div>
+      <div class="iva-note"><span>Incluye IVA ({{ taxPercentText() }})</span><span>{{ money(ivaIncluded) }}</span></div>
     </div>
 
     <ChannelSelect v-if="!tableId" v-model="channel" />
@@ -70,6 +70,7 @@ import { apiService } from "../apiService";
 import DeliveryFields from "./DeliveryFields.vue";
 import ChannelSelect from "./ChannelSelect.vue";
 import { isPlatformChannel } from "../labels";
+import { lineGross, taxPercentText, totalsOf, unitGross } from "../pricing";
 
 export default {
   components: { DeliveryFields, ChannelSelect },
@@ -85,20 +86,20 @@ export default {
     const platform = computed(() => !props.tableId && isPlatformChannel(channel.value));
     const delivery = reactive({ name: "", phone: "", address: "", reference: "" });
     const deliveryTaxRate = 50;
-    const taxRate = 0.08;
     const sending = ref(false);
     const msg = ref("");
     const msgError = ref(false);
     const noteOpen = reactive({});
 
     const count = computed(() => store.platillosSeleccionados.reduce((n, p) => n + p.quantity, 0));
-    const subtotal = computed(() =>
-      store.platillosSeleccionados.reduce((sum, p) => sum + p.price * p.quantity, 0)
-    );
     const deliveryTax = computed(() =>
       deliveryMethod.value === "delivery" && !platform.value ? deliveryTaxRate : 0
     );
-    const total = computed(() => subtotal.value + subtotal.value * taxRate + deliveryTax.value);
+    // Precios con el IVA del negocio y la marca «IVA incluido» de cada platillo (el servidor recalcula al enviar)
+    const cart = computed(() => totalsOf(store.platillosSeleccionados, deliveryTax.value));
+    const subtotal = computed(() => cart.value.subtotal);
+    const total = computed(() => cart.value.total);
+    const ivaIncluded = computed(() => cart.value.tax);
 
     const incrementarCantidad = (index) => {
       store.platillosSeleccionados[index].quantity += 1;
@@ -164,7 +165,10 @@ export default {
       channel,
       platform,
       subtotal,
-      taxRate,
+      ivaIncluded,
+      unitGross,
+      lineGross,
+      taxPercentText,
       deliveryTax,
       total,
       incrementarCantidad,
@@ -261,6 +265,7 @@ h2 {
 
 .totals { display: grid; gap: 0.3rem; font-family: var(--mono); font-size: 0.82rem; color: var(--mirestaurante-muted); }
 .totals > div { display: flex; justify-content: space-between; }
+.iva-note { font-size: 0.74rem; }
 .grand { margin-top: 0.3rem; padding-top: 0.55rem; border-top: 1.5px solid var(--mirestaurante-ink); color: var(--mirestaurante-ink); font-weight: 700; font-size: 1.05rem; }
 
 .modality { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 0.2rem; padding: 0.2rem; border-radius: 0.8rem; background: color-mix(in srgb, var(--mirestaurante-ink) 7%, transparent); }

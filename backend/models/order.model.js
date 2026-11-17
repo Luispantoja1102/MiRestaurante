@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { DEFAULT_TAX_RATE, rateOf, includesTax, lineBreakdown, cartTotals } = require('../utils/tax');
 
 const orderStatuses = ['pending', 'preparing', 'ready', 'served', 'cancelled'];
 const paymentMethods = ['cash', 'card', 'transfer', 'other', 'platform'];
@@ -26,36 +27,52 @@ function normalizeDelivery(raw, platform = false) {
   return { value };
 }
 
-function normalizeOrder(body = {}) {
+/** Agrega a cada renglón lo que paga el cliente con IVA (precio c/u e importe), para tickets y reportes. */
+function priceItems(items, taxRate = DEFAULT_TAX_RATE) {
+  return items.map((i) => {
+    const b = lineBreakdown(i.price, i.quantity, i.priceIncludesTax, rateOf(taxRate));
+    return { ...i, unitGross: b.unitGross, lineGross: b.gross };
+  });
+}
+
+/**
+ * Arma el pedido con sus totales. `taxRate` es la tasa de IVA del negocio (Ajustes → Ventas e IVA).
+ * Cada producto trae `priceIncludesTax` (sin dato = el precio ya incluye el IVA).
+ */
+function normalizeOrder(body = {}, { taxRate = DEFAULT_TAX_RATE } = {}) {
+  const rate = rateOf(taxRate);
   const items = Array.isArray(body.items)
     ? body.items.map((item) => ({
         foodId: item.foodId || item.food || item.id || null,
         name: item.name || 'Producto',
         price: Number(item.price || 0),
+        priceIncludesTax: includesTax(item.priceIncludesTax),
         quantity: Number(item.quantity || 1),
         notes: item.notes || '',
       }))
     : [];
 
-  const subtotal = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  const taxRate = 0.08;
   const channel = channels.includes(body.channel) ? body.channel : 'local';
   // El envío de una app de reparto lo cobra la plataforma, no el negocio
-  const deliveryFee = body.modality === 'delivery' && !isPlatform(channel) ? DELIVERY_FEE : 0;
-  const tax = Number((subtotal * taxRate).toFixed(2));
-  const total = Number((subtotal + tax + deliveryFee).toFixed(2));
+  const fee = body.modality === 'delivery' && !isPlatform(channel) ? DELIVERY_FEE : 0;
+  const { subtotal, tax, deliveryFee, total } = cartTotals(items, { taxRate: rate, deliveryFee: fee });
+  const priced = priceItems(items, rate);
 
   return {
     tableId: body.tableId || null,
     tableName: body.tableName || body.mesa || 'Sin mesa',
-    items,
+    items: priced,
     channel,
     modality: modalities.includes(body.modality) ? body.modality : 'dine-in',
     status: orderStatuses.includes(body.status) ? body.status : 'pending',
     paymentStatus: body.paymentStatus === 'paid' ? 'paid' : 'unpaid',
     paymentMethod: paymentMethods.includes(body.paymentMethod) ? body.paymentMethod : null,
+    // subtotal ya lleva el IVA; `tax` es el que va dentro. `pricesWithTax` distingue estos pedidos de los de antes
+    // (que sumaban el IVA aparte) para que sus tickets se sigan viendo igual.
     subtotal,
     tax,
+    taxRate: rate,
+    pricesWithTax: true,
     deliveryFee,
     total,
     notes: body.notes || body.description || '',
@@ -73,5 +90,6 @@ module.exports = {
   isPlatform,
   normalizeDelivery,
   normalizeOrder,
+  priceItems,
   newToken: () => crypto.randomBytes(24).toString('hex'),
 };

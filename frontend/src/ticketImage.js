@@ -343,8 +343,9 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
   dashed(5);
 
   // ——— Totales ———
-  lr("Subtotal", money(t.subtotal), 16);
-  if (t.tax) lr(t.taxLabel.replace("I.V.A.", "IVA"), money(t.tax), 16);
+  // Pedidos nuevos: el IVA ya va dentro del subtotal (se avisa bajo el total). Los de antes lo sumaban aparte.
+  if (!t.taxIncluded || t.deliveryFee) lr("Subtotal", money(t.subtotal), 16);
+  if (!t.taxIncluded && t.tax) lr(t.taxLabel.replace("I.V.A.", "IVA"), money(t.tax), 16);
   if (t.deliveryFee) lr("Envío", money(t.deliveryFee), 16);
   y += S(6);
   doubleRule(y);
@@ -359,7 +360,14 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
   g.fillText(money(t.total), R, y + S(33));
   y += S(46);
   doubleRule(y);
-  y += S(18);
+  y += S(8);
+  if (t.taxIncluded) {
+    font(14, "600");
+    g.textAlign = "right";
+    g.fillText(`Incluye ${t.taxLabel.replace("I.V.A.", "IVA")}: ${money(t.tax)}`, R, y + S(14));
+    y += S(22);
+  }
+  y += S(10);
 
   // ——— Propina sugerida y renglones a mano ———
   if (t.tips.length && !t.paid) {

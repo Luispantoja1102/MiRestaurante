@@ -92,6 +92,8 @@ async function getFood(req, res) {
 const foodSchema = Joi.object({
   name: Joi.string().trim().min(1).max(80).required().messages({ 'any.required': 'El nombre es obligatorio', 'string.empty': 'El nombre es obligatorio', 'string.max': 'El nombre es demasiado largo (máximo 80 caracteres)' }),
   price: Joi.number().min(0).max(1e6).required().messages({ 'any.required': 'El precio es obligatorio', 'number.base': 'El precio debe ser un número', 'number.min': 'El precio no puede ser negativo' }),
+  // ¿El precio ya incluye el IVA? (lo que paga el cliente). Sin dato sí lo incluye.
+  priceIncludesTax: Joi.boolean().default(true),
   description: Joi.string().trim().max(300).allow('').default(''),
   imgUrl: Joi.string().trim().max(2000).allow('').default(''),
   menuId: Joi.string().required().messages({ 'any.required': 'Falta la categoría (menuId)' }),
@@ -143,7 +145,7 @@ async function updateFood(req, res) {
     }
 
     const patch = {};
-    for (const key of ['name', 'price', 'description', 'imgUrl', 'menuId']) {
+    for (const key of ['name', 'price', 'priceIncludesTax', 'description', 'imgUrl', 'menuId']) {
       if (body[key] !== undefined) patch[key] = value[key];
     }
     if (body.recipe !== undefined || body.extras !== undefined) {

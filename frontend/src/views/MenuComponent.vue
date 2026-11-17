@@ -42,7 +42,7 @@
               <img :src="producto.imgUrl" :alt="producto.name" loading="lazy" />
             </span>
             <span class="pname">{{ producto.name }}</span>
-            <span class="price">{{ money(producto.price) }}</span>
+            <span class="price">{{ money(unitGross(producto.price, producto.priceIncludesTax)) }}</span>
             <span v-if="mode === 'manage'" class="recipe-tag" :class="{ none: !producto.recipe?.length && !producto.extras?.length }">{{ recipeTag(producto) }}</span>
             <span
               v-if="mode === 'pos' && qtyById[producto.id]"
@@ -120,6 +120,7 @@ import { apiService } from "../apiService";
 import { store } from "../store";
 import { hasRole } from "../authStore";
 import { isCounterMode } from "../roles";
+import { totalsOf, unitGross } from "../pricing";
 
 export default {
   components: { AppShell, LSidebar, ProductWizard },
@@ -156,9 +157,8 @@ export default {
       return map;
     });
     const cartCount = computed(() => store.platillosSeleccionados.reduce((n, p) => n + p.quantity, 0));
-    const cartTotal = computed(() =>
-      store.platillosSeleccionados.reduce((sum, p) => sum + p.price * p.quantity, 0) * 1.08
-    );
+    // Con el IVA del negocio y la marca «IVA incluido» de cada platillo
+    const cartTotal = computed(() => totalsOf(store.platillosSeleccionados).total);
     watch(cartCount, (n) => { if (!n) cartOpen.value = false; });
 
     const money = (n) =>
@@ -272,6 +272,7 @@ export default {
       qtyById,
       cartCount,
       cartTotal,
+      unitGross,
       money,
     };
   },

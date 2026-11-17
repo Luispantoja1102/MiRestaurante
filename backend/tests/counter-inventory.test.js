@@ -14,7 +14,7 @@ const ing = (id, name, unit, stock) => ({ id, name, unit, stock, minStock: 0, te
 
 // La bebida del ejemplo: un latte con 5 pumps de lavanda y 3 de azúcar.
 const LATTE = {
-  id: 'f-latte', tenantId: 't1', name: 'Latte', price: 50,
+  id: 'f-latte', tenantId: 't1', name: 'Latte', price: 50, priceIncludesTax: false,
   recipe: [{ ingredientId: 'i-esp', quantity: 1 }, { ingredientId: 'i-lec', quantity: 240 }, { ingredientId: 'i-vaso', quantity: 1 }],
   extras: [
     { ingredientId: 'i-lav', label: 'Sabor lavanda', amount: 1, price: 5, max: 8 },
@@ -28,7 +28,7 @@ const reset = () => {
   state.cash = [{ id: 'c1', tenantId: 't1', status: 'open' }];
   state.orders = []; state.movements = []; state.failAdjust = new Set();
   state.ingredients = [ing('i-esp', 'Espresso', 'shot', 100), ing('i-lec', 'Leche', 'ml', 5000), ing('i-vaso', 'Vasos', 'pza', 50), ing('i-lav', 'Lavanda', 'pump', 200), ing('i-azu', 'Azúcar', 'sobre', 100)];
-  state.foods = [{ ...LATTE, recipe: LATTE.recipe.map((l) => ({ ...l })), extras: LATTE.extras.map((e) => ({ ...e })) }, { id: 'f-pan', tenantId: 't1', name: 'Pan dulce', price: 35, recipe: [], extras: [] }];
+  state.foods = [{ ...LATTE, recipe: LATTE.recipe.map((l) => ({ ...l })), extras: LATTE.extras.map((e) => ({ ...e })) }, { id: 'f-pan', tenantId: 't1', name: 'Pan dulce', price: 35, priceIncludesTax: false, recipe: [], extras: [] }];
 };
 const sale = (items, over = {}, token = cashier()) => api.call('POST', '/orders/counter', { token, body: { items, paymentMethod: 'card', ...over } });
 const latteConExtras = (quantity = 1, over = {}) => ({ foodId: 'f-latte', quantity, options: [{ ingredientId: 'i-lav', quantity: 5 }, { ingredientId: 'i-azu', quantity: 3 }], notes: 'descafeinado', ...over });
@@ -44,7 +44,7 @@ test('el latte del ejemplo: 5 pumps de lavanda, 3 de azúcar y nota "descafeinad
   assert.equal(item.quantity, 2);
   assert.equal(item.notes, 'descafeinado');
   assert.deepEqual(item.options.map((o) => [o.label, o.quantity, o.unitPrice]), [['Sabor lavanda', 5, 5], ['Azúcar', 3, 0]]);
-  assert.equal(r.json.subtotal, 150);
+  assert.equal(r.json.subtotal, 162); // el subtotal ya lleva el IVA
   assert.equal(r.json.tax, 12);
   assert.equal(r.json.total, 162);
 

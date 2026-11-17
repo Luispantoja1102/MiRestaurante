@@ -97,6 +97,28 @@ test('cada rubro tiene su etiqueta, sus iconos, su cierre y su regla de propina'
   assert.equal(by(undefined).bye, '¡Buen provecho!');
 });
 
+test('IVA incluido: el ticket no lo suma otra vez; los pedidos de antes siguen igual', () => {
+  const nuevo = {
+    ...ORDER, pricesWithTax: true, taxRate: 0.16, subtotal: 140, tax: 19.31, total: 140,
+    items: [{ name: 'Chilaquiles', quantity: 2, price: 70, priceIncludesTax: true, unitGross: 70, lineGross: 140 }],
+  };
+  const t = data.orderTicketData(nuevo, venue, labels);
+  assert.equal(t.taxIncluded, true);
+  assert.equal(t.taxLabel, 'I.V.A. (16%)');
+  assert.deepEqual([t.items[0].unit, t.items[0].amount], [70, 140]);
+  const s = text(esc.buildReceipt(t, { cols: 42 }));
+  assert.ok(s.includes('Incluye I.V.A. (16%)') && s.includes('19.31'), 'avisa cuánto IVA lleva dentro');
+  assert.ok(!s.includes('Subtotal'), 'sin subtotal repetido cuando no hay envío');
+  // con envío sí se muestra el subtotal
+  const conEnvio = text(esc.buildReceipt(data.orderTicketData({ ...nuevo, deliveryFee: 50, total: 190 }, venue, labels), { cols: 42 }));
+  assert.ok(conEnvio.includes('Subtotal') && conEnvio.includes('190.00'));
+  // un pedido de antes (sin la marca) conserva su subtotal + IVA aparte y la tasa de 8 %
+  const viejo = data.orderTicketData({ ...ORDER, subtotal: 131, tax: 10.48, total: 141.48 }, venue, labels);
+  const sv = text(esc.buildReceipt(viejo, { cols: 42 }));
+  assert.equal(viejo.taxIncluded, false);
+  assert.ok(sv.includes('Subtotal') && sv.includes('I.V.A. (8%)') && !sv.includes('Incluye'));
+});
+
 test('cuenta sin cobrar: pendiente de pago, sin cajón y sin recibido', () => {
   const t = data.orderTicketData({ ...ORDER, paymentStatus: 'unpaid', paymentMethod: null, paidAt: null, amountReceived: null }, venue, labels);
   const bytes = esc.buildReceipt(t, { cols: 42, openDrawer: false });

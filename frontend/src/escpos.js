@@ -187,12 +187,18 @@ export function buildReceipt(t, { cols = 42, openDrawer = false } = {}) {
   }
   p.rule();
 
-  p.lr("Subtotal", money(t.subtotal));
-  p.lr(t.taxLabel || "I.V.A.", money(t.tax));
-  if (Number(t.deliveryFee)) p.lr("Envío / reparto", `+${money(t.deliveryFee)}`);
+  if (t.taxIncluded) {
+    // El subtotal ya lleva el IVA: solo se muestra si hay envío que sumarle
+    if (Number(t.deliveryFee)) p.lr("Subtotal", money(t.subtotal)).lr("Envío / reparto", `+${money(t.deliveryFee)}`);
+  } else {
+    p.lr("Subtotal", money(t.subtotal));
+    p.lr(t.taxLabel || "I.V.A.", money(t.tax));
+    if (Number(t.deliveryFee)) p.lr("Envío / reparto", `+${money(t.deliveryFee)}`);
+  }
   p.bold().size(2);
   p.lines(leftRight("TOTAL", money(t.total), half));
   p.size(1).bold(false);
+  if (t.taxIncluded) p.lr(`Incluye ${t.taxLabel || "I.V.A."}`, money(t.tax));
 
   if ((t.tips || []).length) {
     p.rule().align("center").bold().line("PROPINA SUGERIDA").bold(false).align("left");

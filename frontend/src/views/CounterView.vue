@@ -59,12 +59,12 @@
               type="button"
               class="tile"
               :class="{ picked: qtyOf(p.id) }"
-              :aria-label="extrasOf(p).length ? `Personalizar ${p.name}, desde ${money(p.price)}` : `Agregar ${p.name}, ${money(p.price)}`"
+              :aria-label="extrasOf(p).length ? `Personalizar ${p.name}, desde ${money(unitGross(p.price, p.priceIncludesTax))}` : `Agregar ${p.name}, ${money(unitGross(p.price, p.priceIncludesTax))}`"
               @click="onTile(p)"
             >
               <span v-if="p.imgUrl" class="thumb"><img :src="p.imgUrl" alt="" loading="lazy" /></span>
               <span class="tile-name">{{ p.name }}</span>
-              <span class="tile-price">{{ money(p.price) }}<em v-if="extrasOf(p).length" class="tile-extras"> · personaliza</em></span>
+              <span class="tile-price">{{ money(unitGross(p.price, p.priceIncludesTax)) }}<em v-if="extrasOf(p).length" class="tile-extras"> · personaliza</em></span>
               <span v-if="missing(p).length" class="tile-missing" :title="`Sin existencia: ${missing(p).join(', ')}`">Sin {{ missing(p)[0] }}</span>
               <span v-if="qtyOf(p.id)" class="qty-badge" aria-hidden="true">{{ qtyOf(p.id) }}</span>
             </button>
@@ -85,7 +85,7 @@
                 <div class="line-main">
                   <div class="line-copy">
                     <p class="name">{{ l.name }}</p>
-                    <p class="unit">{{ money(l.price) }} c/u</p>
+                    <p class="unit">{{ money(unitGross(l.price, l.food?.priceIncludesTax)) }} c/u</p>
                     <p v-if="l.options.length" class="opts">{{ optionsText(l) }}</p>
                   </div>
                   <div class="qty">
@@ -93,7 +93,7 @@
                     <span>{{ l.quantity }}</span>
                     <button type="button" :aria-label="`Agregar uno de ${l.name}`" @click="inc(i)">+</button>
                   </div>
-                  <p class="line-total">{{ money(l.price * l.quantity) }}</p>
+                  <p class="line-total">{{ money(lineGross(l.price, l.quantity, l.food?.priceIncludesTax)) }}</p>
                 </div>
                 <input
                   v-if="noteOpen[i] || l.notes"
@@ -129,9 +129,9 @@
 
             <div class="totals">
               <div><span>Subtotal</span><span>{{ money(totals.subtotal) }}</span></div>
-              <div><span>IVA (8%)</span><span>{{ money(totals.tax) }}</span></div>
               <div v-if="totals.shipping"><span>Reparto</span><span>{{ money(totals.shipping) }}</span></div>
               <div class="grand"><span>Total</span><span>{{ money(totals.total) }}</span></div>
+              <div class="iva-note"><span>Incluye IVA ({{ taxPercentText() }})</span><span>{{ money(totals.tax) }}</span></div>
             </div>
 
             <button type="button" class="btn charge" :disabled="!lines.length || !cash.open || deliveryMissing" @click="openPay">
@@ -190,7 +190,7 @@
 
             <div class="modal-actions">
               <button type="button" class="btn" @click="closeBuilder">Cancelar</button>
-              <button type="submit" class="btn primary">{{ builder.editIndex >= 0 ? 'Guardar' : 'Agregar' }} · {{ money(builderUnit * builder.quantity) }}</button>
+              <button type="submit" class="btn primary">{{ builder.editIndex >= 0 ? 'Guardar' : 'Agregar' }} · {{ money(lineGross(builderUnit, builder.quantity, builder.food.priceIncludesTax)) }}</button>
             </div>
           </form>
         </div>
@@ -268,11 +268,10 @@ import { apiService } from "../apiService";
 import { hasRole } from "../authStore";
 import { bindLive } from "../live";
 import { extrasOf, lineKey, missingIngredients, priceWithExtras } from "../recipeMath";
+import { lineGross, taxPercentText, totalsOf, unitGross } from "../pricing";
 
 // El servidor recalcula todo (precios del menú, IVA, total); esto solo muestra lo mismo mientras se arma la cuenta.
-const TAX_RATE = 0.08;
 const DELIVERY_FEE = 50; // igual que en el servidor
-const round2 = (n) => Number(Number(n).toFixed(2));
 const money = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 
 // Notas que se repiten en un café: un toque en vez de escribir
@@ -325,10 +324,9 @@ const newSaleBtn = ref(null);
 const products = computed(() => productsByMenu[selectedMenuId.value] || []);
 const itemCount = computed(() => lines.value.reduce((n, l) => n + l.quantity, 0));
 const totals = computed(() => {
-  const subtotal = lines.value.reduce((sum, l) => sum + l.price * l.quantity, 0);
-  const tax = round2(subtotal * TAX_RATE);
   const shipping = where.value === "delivery" && !platform.value ? DELIVERY_FEE : 0;
-  return { subtotal: round2(subtotal), tax, shipping, total: round2(subtotal + tax + shipping) };
+  const t = totalsOf(lines.value, shipping);
+  return { subtotal: t.subtotal, tax: t.tax, shipping, total: t.total };
 });
 const deliveryMissing = computed(
   () =>
@@ -658,6 +656,7 @@ onUnmounted(() => live.stop());
 .where button[aria-pressed="true"] { background: var(--mirestaurante-primary-soft); border-color: var(--mirestaurante-primary); color: var(--mirestaurante-primary); }
 .totals { display: grid; gap: 0.3rem; font-size: 0.92rem; color: var(--mirestaurante-muted); }
 .totals div { display: flex; justify-content: space-between; }
+.totals .iva-note { font-size: 0.8rem; }
 .totals .grand { color: var(--mirestaurante-ink); font-size: 1.35rem; font-weight: 800; padding-top: 0.4rem; border-top: 1px dashed var(--mirestaurante-line); }
 .charge { min-height: 3.6rem; font-size: 1.15rem; }
 

@@ -1,5 +1,6 @@
 const db = require('../database/mongodb');
-const { normalizeOrder, normalizeDelivery, orderStatuses, paymentMethods, channels, channelLabels, isPlatform } = require('../models/order.model');
+const { rateOf, includesTax } = require('../utils/tax');
+const { normalizeOrder, priceItems, normalizeDelivery, orderStatuses, paymentMethods, channels, channelLabels, isPlatform } = require('../models/order.model');
 const inv = require('../models/inventory');
 const inventory = require('../services/inventory.service');
 const point = require('../services/point.service');
@@ -67,7 +68,14 @@ async function create(req, res) {
       body.modality = body.modality === 2 ? 'takeaway' : 'dine-in';
     }
 
-    const payload = normalizeOrder(body);
+    // El precio y la marca «IVA incluido» salen del menú del negocio, no de lo que mande la pantalla
+    const [settings, foods] = await Promise.all([db.GetSettings(req.tenantId), db.GetFoods(req.tenantId)]);
+    const foodsById = new Map(foods.map((f) => [String(f.id), f]));
+    body.items = (body.items || []).map((i) => {
+      const food = foodsById.get(String(i.foodId || i.food || i.id || ''));
+      return { ...i, priceIncludesTax: food ? includesTax(food.priceIncludesTax) : includesTax(i.priceIncludesTax) };
+    });
+    const payload = normalizeOrder(body, { taxRate: rateOf(settings?.taxRate) });
     payload.tenantId = req.tenantId;
     if (payload.modality === 'delivery') {
       const d = normalizeDelivery(body.delivery, isPlatform(payload.channel));
@@ -83,7 +91,6 @@ async function create(req, res) {
     const created = await db.CreateOrder(payload);
 
     try {
-      const foodsById = new Map((await db.GetFoods(req.tenantId)).map((f) => [String(f.id), f]));
       await inventory.applySale({ tenantId: req.tenantId, order: created, foodsById, by: req.user?.username });
     } catch (e) {
       console.error('[inventory] pedido sin descontar:', e.message);
@@ -185,6 +192,7 @@ async function counterSale(req, res) {
         name: food.name,
         price: inv.unitPriceWithExtras(food, resolved.options),
         basePrice: Number(food.price) || 0,
+        priceIncludesTax: includesTax(food.priceIncludesTax), // los extras llevan la misma marca que el platillo
         options: resolved.options,
         quantity,
         notes: String(line.notes || '').trim().slice(0, 80),
@@ -199,8 +207,9 @@ async function counterSale(req, res) {
     }
 
     // normalizeOrder calcula subtotal, IVA y total (con envío solo si es a domicilio).
-    const payload = normalizeOrder({ items, modality: delivery ? 'delivery' : 'dine-in', channel });
-    payload.items = items; // normalizeOrder solo conserva los campos básicos; aquí también van las opciones
+    const settings = await db.GetSettings(req.tenantId);
+    const payload = normalizeOrder({ items, modality: delivery ? 'delivery' : 'dine-in', channel }, { taxRate: rateOf(settings?.taxRate) });
+    payload.items = priceItems(items, payload.taxRate); // normalizeOrder solo conserva los campos básicos; aquí también van las opciones
     const customerName = String(body.customerName || '').trim().slice(0, 40);
     let received = null;
     if (method === 'cash') {
@@ -223,7 +232,6 @@ async function counterSale(req, res) {
       payload.pointChargeId = chargeId;
     }
 
-    const settings = await db.GetSettings(req.tenantId);
     const now = new Date();
 
     Object.assign(payload, {

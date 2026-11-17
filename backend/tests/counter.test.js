@@ -9,8 +9,8 @@ test.before(async () => { api = await startServer(app); });
 test.after(async () => { await api.close(); });
 
 state.foods.push(
-  { id: 'f-latte', name: 'Latte', price: 40, tenantId: 't1' },
-  { id: 'f-pan', name: 'Pan dulce', price: 35, tenantId: 't1' },
+  { id: 'f-latte', name: 'Latte', price: 40, priceIncludesTax: false, tenantId: 't1' },
+  { id: 'f-pan', name: 'Pan dulce', price: 35, priceIncludesTax: false, tenantId: 't1' },
   { id: 'f-otro', name: 'Del vecino', price: 10, tenantId: 't2' },
 );
 state.settings.t1 = { businessType: 'cafe', timezone: 'America/Tijuana' };
@@ -48,8 +48,8 @@ test('una venta en tarjeta queda cobrada y entregada, sin mesa ni cocina', async
   assert.equal(o.createdBy, 'paco');
   assert.equal(o.turno, 1);
   assert.ok(o.paidAt);
-  // 2 × 40 + 35 = 115; IVA 8 % = 9.20; sin costo de envío
-  assert.equal(o.subtotal, 115);
+  // Platillos sin IVA incluido: 2 × 40 + 35 = 115 de base; IVA 8 % = 9.20 se suma; subtotal = lo que cuestan con IVA
+  assert.equal(o.subtotal, 124.2);
   assert.equal(o.tax, 9.2);
   assert.equal(o.deliveryFee, 0);
   assert.equal(o.total, 124.2);
@@ -61,7 +61,7 @@ test('los precios salen del menú: lo que mande el cliente se ignora', async () 
   assert.equal(r.status, 201);
   assert.equal(r.json.items[0].price, 40);
   assert.equal(r.json.items[0].name, 'Latte');
-  assert.equal(r.json.subtotal, 40);
+  assert.equal(r.json.subtotal, 43.2);
 });
 
 test('efectivo: calcula el cambio, acepta exacto y rechaza si no alcanza', async () => {

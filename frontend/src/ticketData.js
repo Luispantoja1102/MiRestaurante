@@ -55,11 +55,13 @@ function business(v) {
  */
 export function orderTicketData(order, v = {}, labels = {}, kind = "receipt") {
   const kitchen = kind === "kitchen";
+  const withTax = Boolean(order.pricesWithTax);
   const items = (order.items || []).map((i) => ({
     qty: Number(i.quantity) || 0,
     name: i.name || "Producto",
-    unit: Number(i.price) || 0,
-    amount: (Number(i.price) || 0) * (Number(i.quantity) || 0),
+    // Con IVA: lo que paga el cliente por pieza y por renglón (el servidor lo deja en cada renglón)
+    unit: withTax && i.unitGross != null ? Number(i.unitGross) : Number(i.price) || 0,
+    amount: withTax && i.lineGross != null ? Number(i.lineGross) : (Number(i.price) || 0) * (Number(i.quantity) || 0),
     options: (i.options || []).map((o) => ({ label: o.label || "", qty: Number(o.quantity) || 0, amount: (Number(o.unitPrice) || 0) * (Number(o.quantity) || 0) })),
     notes: i.notes || "",
   }));
@@ -91,7 +93,9 @@ export function orderTicketData(order, v = {}, labels = {}, kind = "receipt") {
     items,
     subtotal: Number(order.subtotal) || 0,
     tax: Number(order.tax) || 0,
-    taxLabel: "I.V.A. (8%)",
+    // Los pedidos nuevos traen el IVA dentro del subtotal («Incluye IVA»); los de antes lo sumaban aparte
+    taxIncluded: Boolean(order.pricesWithTax),
+    taxLabel: `I.V.A. (${Number(((order.taxRate ?? 0.08) * 100).toFixed(2))}%)`,
     deliveryFee: Number(order.deliveryFee) || 0,
     total: Number(order.total) || 0,
     // La propina sugerida no va en el mostrador (ya se pagó) ni en los rubros donde no es costumbre (café, otro)

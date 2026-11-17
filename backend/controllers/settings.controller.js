@@ -1,6 +1,7 @@
 const settingsSchema = require('../models/settings.model');
 const db = require('../database/mongodb');
 const { limitsFor, teamFitError } = require('../models/venueMode');
+const { rateOf } = require('../utils/tax');
 
 async function GetSettings(req, res) {
   try {
@@ -37,6 +38,8 @@ async function SaveSettings(req, res) {
 
     const payload = {
       ...value,
+      // Si quien guarda no manda la tasa (p. ej. solo cambia el logo) se conserva la que ya tenía
+      taxRate: rateOf(value.taxRate ?? existing?.taxRate),
       serviceFocus: limits.focus,
       tenantId: req.tenantId,
       setupCompleted: true,

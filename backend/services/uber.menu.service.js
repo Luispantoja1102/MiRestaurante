@@ -12,9 +12,9 @@
 const db = require('../database/mongodb');
 const uber = require('./uber.service');
 const { extraItemId } = require('../models/uberIds');
+const { DEFAULT_TAX_RATE, rateOf, includesTax } = require('../utils/tax');
 
 const MENU_SCOPE = 'eats.store';
-const TAX_RATE = 8; // % que se suma al precio: igual que `normalizeOrder` (0.08)
 const SUSPEND_HOURS = 24; // un agotado vence solo si no lo renovamos o reanudamos
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -43,7 +43,10 @@ function unavailableItemIds(foods, ingredientsById) {
 }
 
 /** Convierte el menú de MiRestaurante al formato de Uber. @returns { body, itemIds, outIds } */
-function buildMenu({ foods, menus, ingredients, title, open, close, now = Date.now() }) {
+function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DEFAULT_TAX_RATE, now = Date.now() }) {
+  // Precio con IVA incluido → `vat_rate_percentage`; precio sin IVA (se suma al cobrar) → `tax_rate`. ⚠️ confirmar en el sandbox.
+  const pct = Math.round(rateOf(taxRate) * 10000) / 100;
+  const taxInfo = (included) => (included ? { vat_rate_percentage: pct } : { tax_rate: pct });
   const ingredientsById = new Map(ingredients.map((i) => [String(i.id), i]));
   const outIds = unavailableItemIds(foods, ingredientsById);
   const until = Math.floor(now / 1000) + SUSPEND_HOURS * 3600;
@@ -65,7 +68,7 @@ function buildMenu({ foods, menus, ingredients, title, open, close, now = Date.n
         ...(f.description ? { description: text(f.description) } : {}),
         ...(/^https:\/\//i.test(f.imgUrl || '') ? { image_url: f.imgUrl } : {}), // Uber solo acepta una dirección https
         price_info: { price: cents(f.price) },
-        tax_info: { tax_rate: TAX_RATE },
+        tax_info: taxInfo(includesTax(f.priceIncludesTax)),
         external_data: String(f.id),
         ...(extras.length ? { modifier_group_ids: { ids: [groupId] } } : {}),
         ...suspended(String(f.id)),
@@ -82,7 +85,7 @@ function buildMenu({ foods, menus, ingredients, title, open, close, now = Date.n
           id: extraItemId(f, e),
           title: text(e.label),
           price_info: { price: cents(e.price) },
-          tax_info: { tax_rate: TAX_RATE },
+          tax_info: taxInfo(includesTax(f.priceIncludesTax)), // el extra lleva la misma marca que su platillo
           quantity_info: { quantity: { min_permitted: 0, max_permitted: Number(e.max || 1) } },
           ...suspended(extraItemId(f, e)),
         });
@@ -121,7 +124,7 @@ async function publishMenu(tenantId, hours = {}) {
   checkHours(open, close);
 
   const [foods, menus, ingredients, settings] = await Promise.all([db.GetFoods(tenantId), db.GetMenus(tenantId), db.GetIngredients(tenantId), db.GetSettings(tenantId)]);
-  const built = buildMenu({ foods, menus, ingredients, title: settings?.businessName, open, close });
+  const built = buildMenu({ foods, menus, ingredients, title: settings?.businessName, open, close, taxRate: settings?.taxRate });
   if (!built.body.items.length) throw httpError('Agrega productos a tus categorías antes de publicar el menú');
 
   try {
