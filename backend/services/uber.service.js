@@ -5,10 +5,11 @@ const zlib = require('zlib');
 const db = require('../database/mongodb');
 const inventory = require('./inventory.service');
 const { normalizeOrder } = require('../models/order.model');
+const { extraItemId } = require('../models/uberIds');
 
 const ENVIRONMENTS = {
-  sandbox: { auth: 'https://sandbox-login.uber.com/oauth/v2/token', api: 'https://test-api.uber.com' },
-  production: { auth: 'https://auth.uber.com/oauth/v2/token', api: 'https://api.uber.com' },
+  sandbox: { auth: 'https://sandbox-login.uber.com/oauth/v2/token', authorize: 'https://sandbox-login.uber.com/oauth/v2/authorize', api: 'https://test-api.uber.com' },
+  production: { auth: 'https://auth.uber.com/oauth/v2/token', authorize: 'https://auth.uber.com/oauth/v2/authorize', api: 'https://api.uber.com' },
 };
 const SCOPES = 'eats.order eats.store.orders.read';
 // El estado de entrega del restaurante usa un scope aparte: se pide solo cuando hace falta (si Uber no lo ha habilitado, no afecta al resto)
@@ -29,6 +30,7 @@ function config() {
     clientId: process.env.UBER_EATS_CLIENT_ID || '',
     clientSecret: process.env.UBER_EATS_CLIENT_SECRET || '',
     authUrl: process.env.UBER_EATS_AUTH_URL || ENVIRONMENTS[env].auth,
+    authorizeUrl: process.env.UBER_EATS_AUTHORIZE_URL || ENVIRONMENTS[env].authorize,
     apiUrl: process.env.UBER_EATS_API_URL || ENVIRONMENTS[env].api,
   };
 }
@@ -71,8 +73,8 @@ async function getToken(force = false, scope = SCOPES) {
 }
 
 // gzip: para cuerpos grandes (el menú); Uber lo pide comprimido
-async function api(path, { method = 'GET', body, scope, gzip } = {}, retried = false) {
-  const token = await getToken(retried, scope);
+async function api(path, { method = 'GET', body, scope, gzip, token: userToken } = {}, retried = false) {
+  const token = userToken || (await getToken(retried, scope)); // userToken: el del comercio, solo para activar tiendas
   const json = body ? JSON.stringify(body) : undefined;
   const res = await fetch(`${config().apiUrl}${path}`, {
     method,
@@ -80,7 +82,7 @@ async function api(path, { method = 'GET', body, scope, gzip } = {}, retried = f
     body: json && gzip ? zlib.gzipSync(json) : json,
     signal: AbortSignal.timeout(gzip ? 30_000 : 10_000),
   });
-  if (res.status === 401 && !retried) return api(path, { method, body, scope, gzip }, true);
+  if (res.status === 401 && !retried && !userToken) return api(path, { method, body, scope, gzip }, true);
   if (!res.ok) {
     const e = httpError(`Uber Eats respondió ${res.status}`, res.status);
     e.detail = (await res.text().catch(() => '')).slice(0, 300); // lo que Uber dice que está mal
@@ -133,6 +135,16 @@ const setStoreStatus = (storeId, { status, pausedUntil, reason } = {}) =>
       ...(pausedUntil ? { paused_until: isoSeconds(pausedUntil) } : {}),
       ...(reason ? { reason: String(reason).slice(0, 100) } : {}),
     },
+  });
+
+// Tiempo de preparación de la tienda. Lo que Uber documenta es solo LEER (`avg_prep_time`, en minutos, en los datos de la
+// tienda). Para CAMBIARLO la página oficial no carga: ruta y cuerpo salen de fuentes de terceros, sin confirmar.
+const storeDetails = (storeId) => api(`/v1/eats/stores/${encodeURIComponent(storeId)}`, { scope: STORE_READ_SCOPE });
+const setPrepTime = (storeId, minutes) =>
+  api(`/v1/delivery/store/${encodeURIComponent(storeId)}/update-store-prep-time`, {
+    method: 'POST',
+    scope: STORE_READ_SCOPE,
+    body: { default_prep_time: Math.round(Number(minutes) * 60) }, // segundos (tope 10 800 = 3 h según esas fuentes)
   });
 
 /**
@@ -192,7 +204,8 @@ function mapOrder(u) {
     if (alerg) allergy = true;
     // Las alergias van primero: son lo último que debe cortarse
     const notes = [alerg && `ALERGIA: ${alerg}`, ...mods, i.special_instructions].filter(Boolean).join(' · ').slice(0, 200);
-    return { foodId: null, name: i.title || 'Producto', price: money(i.price?.unit_price) ?? 0, quantity: Number(i.quantity) || 1, notes };
+    const picked = (i.selected_modifier_groups || []).flatMap((g) => (g.selected_items || []).map((s) => ({ id: String(s.id || ''), quantity: Number(s.quantity) || 1 })));
+    return { foodId: null, uberId: i.id ? String(i.id) : null, picked, name: i.title || 'Producto', price: money(i.price?.unit_price) ?? 0, quantity: Number(i.quantity) || 1, notes };
   });
   const eater = u.eater || {};
   const name = [eater.first_name, eater.last_name].filter(Boolean).join(' ').trim() || 'Cliente Uber Eats';
@@ -209,6 +222,7 @@ function mapOrder(u) {
     tax: money(charges.tax) ?? 0,
     total: money(charges.total) ?? sum,
     type: u.type || null,
+    readyAt: u.estimated_ready_for_pickup_at ? new Date(u.estimated_ready_for_pickup_at) : null, // lo mejor que dice Uber de cuándo se recoge
     allergy,
     notes: [u.cart?.special_instructions ?? u.special_instructions, utensils(u)].filter(Boolean).join(' · ').slice(0, 200),
   };
@@ -217,7 +231,18 @@ function mapOrder(u) {
 const normName = (s) => String(s || '').trim().toLowerCase();
 
 /** Guarda un pedido nuevo de Uber (una sola vez por pedido). Devuelve el pedido o null si se ignora. */
-async function ingestOrder(storeId, orderId) {
+/** Extras que el cliente eligió en Uber, en el formato de una venta nuestra (sirve para descontar sus ingredientes). */
+function optionsFrom(food, picked) {
+  const byId = new Map((food.extras || []).map((e) => [extraItemId(food, e), e]));
+  const totals = new Map();
+  for (const p of picked || []) if (byId.has(p.id)) totals.set(p.id, (totals.get(p.id) || 0) + p.quantity);
+  return [...totals].map(([id, quantity]) => {
+    const e = byId.get(id);
+    return { ingredientId: String(e.ingredientId), label: e.label, quantity, unitPrice: Number(e.price) || 0, amount: Number(e.amount) || 0 };
+  });
+}
+
+async function ingestOrder(storeId, orderId, { scheduled = false } = {}) {
   const link = await db.GetIntegrationByStore('uber', storeId);
   if (!link) return { skipped: 'tienda sin vincular' }; // la tienda no pertenece a ningún negocio
   if (await db.GetOrderByExternal('uber', orderId)) return { skipped: 'repetido' }; // reintento del webhook
@@ -226,13 +251,20 @@ async function ingestOrder(storeId, orderId) {
   const m = mapOrder(u);
   const tenantId = link.tenantId;
 
-  // Si el nombre del producto coincide con el del menú, se descuenta su inventario
+  // El producto se reconoce por el id del menú que publicamos (o, si no, por su nombre) y así se descuenta su inventario y el de sus extras
   const foods = await db.GetFoods(tenantId);
   const byName = new Map(foods.map((f) => [normName(f.name), f]));
-  for (const it of m.items) it.foodId = byName.get(normName(it.name))?.id ?? null;
   const foodsById = new Map(foods.map((f) => [String(f.id), f]));
+  for (const it of m.items) {
+    const food = foodsById.get(it.uberId) || byName.get(normName(it.name));
+    it.foodId = food?.id ?? null;
+    it.options = food ? optionsFrom(food, it.picked) : [];
+    delete it.uberId;
+    delete it.picked;
+  }
 
   const payload = normalizeOrder({ items: m.items, modality: m.modality, channel: 'uber' });
+  payload.items = m.items; // normalizeOrder solo conserva los campos básicos; aquí también van los extras
   const now = new Date();
   Object.assign(payload, {
     tenantId,
@@ -255,6 +287,8 @@ async function ingestOrder(storeId, orderId) {
       displayId: m.displayId,
       type: m.type,
       allergy: m.allergy,
+      scheduled,
+      readyAt: m.readyAt,
       state: 'awaiting',
       receivedAt: now,
       deadline: new Date(now.getTime() + ACCEPT_WINDOW_MS),
@@ -299,8 +333,9 @@ async function cancelFromUber(orderId) {
 async function handleEvent(ev) {
   const info = { eventType: ev?.event_type || 'desconocido', orderId: ev?.meta?.resource_id || null, storeId: ev?.meta?.user_id || null };
   if (!info.orderId) return { ...info, outcome: 'ignored', detail: 'sin pedido' };
-  if (info.eventType === 'orders.notification') {
-    const r = await ingestOrder(info.storeId, info.orderId);
+  if (info.eventType === 'orders.notification' || info.eventType === 'orders.scheduled.notification') {
+    // Pedido programado: Uber no documenta cuándo se entrega; se guarda marcado y con la hora estimada de recogida
+    const r = await ingestOrder(info.storeId, info.orderId, { scheduled: info.eventType === 'orders.scheduled.notification' });
     return r.order ? { ...info, tenantId: r.order.tenantId, outcome: 'ok' } : { ...info, outcome: 'ignored', detail: r.skipped };
   }
   if (info.eventType === 'orders.cancel' || info.eventType === 'orders.failure') {
@@ -362,9 +397,32 @@ async function reconcileStore(link) {
   return out;
 }
 
+/**
+ * Revisión de todas las tiendas (la corre un reloj del servidor o un cron externo): solo las que tienen la caja abierta,
+ * porque sin caja nadie acepta y la tienda ya está pausada.
+ */
+async function sweepAll() {
+  const out = { checked: 0, recovered: 0, closed: 0 };
+  if (!isConfigured()) return out;
+  for (const link of await db.ListIntegrations('uber')) {
+    if (!link.storeId || link.deprovisioned || !(await db.GetOpenCashSession(link.tenantId))) continue;
+    try {
+      const r = await reconcileStore(link);
+      out.checked++;
+      out.recovered += r.recovered;
+      out.closed += r.closed;
+    } catch (err) {
+      console.error('[uber] revisión periódica:', err.message);
+    }
+  }
+  return out;
+}
+
 /** Al abrir la caja: reanuda la tienda y revisa si faltan pedidos. Todo sin esperar y sin estorbar. */
 async function onCashOpened(tenantId) {
-  require('./uber.menu.service').syncAvailability(tenantId, { force: true }); // renueva los agotados (vencen a las 24 h)
+  // Sube lo que quedó pendiente del menú y renueva los agotados (vencen a las 24 h)
+  const menu = require('./uber.menu.service');
+  menu.republishIfDirty(tenantId).finally(() => menu.syncAvailability(tenantId, { force: true }));
   await syncStoreWithCash(tenantId, true);
   try {
     const link = isConfigured() ? await db.GetIntegrationByTenant('uber', tenantId) : null;
@@ -385,10 +443,13 @@ module.exports = {
   restaurantDeliveryStatus,
   storeStatus,
   setStoreStatus,
+  storeDetails,
+  setPrepTime,
   request: api,
   syncStoreWithCash,
   onCashOpened,
   reconcileStore,
+  sweepAll,
   acceptanceStats,
   recordEvent,
   mapOrder,

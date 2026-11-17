@@ -63,6 +63,7 @@
               <span class="badge" :class="o.paymentStatus">{{ paymentText(o.paymentStatus) }}</span>
             </div>
           </div>
+          <p v-if="readyText(o)" class="ready-at">{{ readyText(o) }}</p>
           <div v-if="waiting(o)" class="awaiting" role="alert">
             <p><strong>{{ channelLabel[o.channel] || 'La plataforma' }} espera tu respuesta</strong> · {{ remaining(o) }}</p>
             <p v-if="o.external?.allergy" class="allergy-alert"><strong>Atención:</strong> este pedido trae alergias. Revísalas abajo antes de aceptar; si no puedes cumplirlas, rechaza el pedido.</p>
@@ -220,6 +221,13 @@ const canCancelExternal = (o) => o.external?.state === "accepted" && !isDone(o);
 // Lo reparte el propio restaurante: Uber pide avisar que salió, que va llegando y que entregó
 const ownDelivery = (o) => canCancelExternal(o) && o.external.type === "DELIVERY_BY_RESTAURANT";
 const waiting = (o) => o.external?.state === "awaiting";
+// Pedido programado y/o la hora de recogida que estima Uber
+function readyText(o) {
+  const e = o.external;
+  if (!e) return "";
+  const at = e.readyAt ? new Date(e.readyAt).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  return [e.scheduled ? "Pedido programado" : "", at && `Recogida estimada: ${at}`].filter(Boolean).join(" · ");
+}
 function remaining(o) {
   const left = new Date(o.external?.deadline).getTime() - now.value;
   if (!Number.isFinite(left)) return "";
@@ -514,6 +522,7 @@ onUnmounted(() => {
 .badge.st-served { background: var(--mirestaurante-success-soft); color: var(--mirestaurante-success); }
 .badge.st-cancelled { background: var(--mirestaurante-danger-soft); color: var(--mirestaurante-danger); }
 .badge.refunded { background: var(--mirestaurante-danger-soft); color: var(--mirestaurante-danger); }
+.ready-at { margin: 0.4rem 0 0; font-size: 0.85rem; font-weight: 600; }
 .item-note { display: block; font-size: .82rem; color: var(--mirestaurante-muted); }
 .item-note.allergy { font-weight: 800; color: var(--mirestaurante-danger); }
 .order-note { margin: 0 0 .5rem; font-size: .85rem; font-style: italic; color: var(--mirestaurante-muted); }

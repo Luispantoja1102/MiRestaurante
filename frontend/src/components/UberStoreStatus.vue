@@ -11,6 +11,14 @@
         <button type="button" class="us-btn" :disabled="busy" @click="change('PAUSED')">Pausar tienda</button>
       </template>
     </p>
+    <div v-if="showAuto" class="us-prep">
+      <label>
+        Tiempo de preparación de la tienda
+        <input v-model.number="prep" type="number" min="1" max="180" inputmode="numeric" aria-label="Minutos" /> min
+      </label>
+      <button type="button" class="us-btn" :disabled="busy || !prepValid" @click="savePrep">Guardar</button>
+      <span v-if="prepMsg" class="us-note" role="status">{{ prepMsg }}</span>
+    </div>
     <label v-if="showAuto" class="us-auto">
       <input type="checkbox" :checked="s.autoPause" :disabled="busy" @change="toggleAuto($event.target.checked)" />
       Pausar la tienda al cerrar la caja y reanudarla al abrirla
@@ -45,6 +53,9 @@ const s = reactive({ linked: false, status: null, offlineReason: null, autoPause
 const busy = ref(false);
 const err = ref("");
 const minutes = ref(60);
+const prep = ref(15);
+const prepMsg = ref("");
+const prepValid = computed(() => Number.isInteger(prep.value) && prep.value >= 1 && prep.value <= 180);
 
 const isOnline = computed(() => String(s.status || "").toUpperCase() === "ONLINE");
 // Solo se reanuda lo que pausó el restaurante; el horario y las pausas de Uber no se tocan desde aquí
@@ -77,6 +88,29 @@ async function change(status) {
   }
 }
 
+async function loadPrep() {
+  try {
+    const r = await apiService.uberPrep();
+    if (r.prepMinutes) prep.value = r.prepMinutes;
+  } catch {
+    /* se queda el valor por defecto */
+  }
+}
+
+async function savePrep() {
+  busy.value = true;
+  err.value = "";
+  prepMsg.value = "";
+  try {
+    await apiService.uberSetPrep(prep.value);
+    prepMsg.value = "Guardado.";
+  } catch (e) {
+    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar el tiempo.";
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function toggleAuto(value) {
   busy.value = true;
   err.value = "";
@@ -92,7 +126,10 @@ async function toggleAuto(value) {
 
 // Al abrir o cerrar la caja el servidor pausa o reanuda la tienda sin esperar: se vuelve a leer poco después
 watch(() => props.refreshKey, () => setTimeout(refresh, 1500));
-onMounted(refresh);
+onMounted(() => {
+  refresh();
+  if (props.showAuto) loadPrep();
+});
 </script>
 
 <style scoped>
@@ -105,5 +142,8 @@ onMounted(refresh);
 .us-select { min-height: 2rem; border-radius: 0.5rem; border: 1px solid var(--mirestaurante-line); background: var(--mirestaurante-panel); color: var(--mirestaurante-ink); font: inherit; }
 .us-btn { min-height: 2rem; padding: 0 0.8rem; border-radius: 0.5rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-panel); color: var(--mirestaurante-ink); font: inherit; font-weight: 700; cursor: pointer; }
 .us-auto { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--mirestaurante-muted); }
+.us-prep { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.us-prep input { width: 4.5rem; min-height: 2rem; border-radius: 0.5rem; border: 1px solid var(--mirestaurante-line); background: var(--mirestaurante-panel); color: var(--mirestaurante-ink); font: inherit; }
+.us-note { font-size: 0.85rem; color: var(--mirestaurante-muted); }
 .us-err { margin: 0; font-size: 0.85rem; color: var(--mirestaurante-danger); }
 </style>

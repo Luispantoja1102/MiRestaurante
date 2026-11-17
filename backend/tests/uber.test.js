@@ -19,6 +19,8 @@ let uberOrders = {}; // orderId -> respuesta de Get Order Details
 let uberFails = null; // status con el que falla accept/deny
 let storeState = { status: 'ONLINE' }; // estado de la tienda en Uber
 let createdOrders = []; // ids que Uber tiene en CREATED (null = Uber falla)
+let storeAvgPrep = 15; // avg_prep_time de la tienda (null = Uber falla al consultarla)
+let prepFails = false;
 
 // Los pedidos a la API local pasan; todo lo de Uber se simula.
 global.fetch = async (url, opts = {}) => {
@@ -28,6 +30,8 @@ global.fetch = async (url, opts = {}) => {
   uberCalls.push({ url: u, method: opts.method || 'GET', body: raw, headers: opts.headers || {} });
   const json = (status, data) => new Response(data === undefined ? null : JSON.stringify(data), { status });
   if (u.includes('/oauth/v2/token')) return json(200, { access_token: 'tk', expires_in: 2592000 });
+  if (/\/v1\/eats\/stores\/[^/?]+$/.test(u)) return storeAvgPrep == null ? json(500, {}) : json(200, { name: 'Tienda', avg_prep_time: storeAvgPrep });
+  if (/\/v1\/delivery\/store\/[^/]+\/update-store-prep-time$/.test(u)) return prepFails ? json(404, { message: 'no existe' }) : json(204);
   if (/\/v1\/eats\/stores\/[^/]+\/created-orders/.test(u)) {
     return createdOrders ? json(200, { orders: createdOrders.map((id) => ({ id, current_state: 'CREATED', placed_at: '2026-11-16T10:00:00Z' })) }) : json(500, {});
   }
@@ -428,13 +432,13 @@ test('la bitácora guarda cada aviso con su resultado y los errores al hablar co
   await hook(body('orders.notification', 'o-lllll1'));
   await hook(body('orders.notification', 'o-lllll1')); // reintento
   await hook(body('orders.notification', 'o-lllll1', 'tienda-desconocida'));
-  await hook(JSON.stringify({ event_type: 'store.provisioned', meta: { resource_id: 'x', user_id: STORE } }));
+  await hook(JSON.stringify({ event_type: 'orders.release', meta: { resource_id: 'x', user_id: STORE } }));
   await hook(body('orders.notification', 'o-sin-detalle')); // Uber no lo conoce: falla y Uber reintentará
   const last = events().slice(-5).map((e) => [e.eventType, e.outcome, e.detail || '']);
   assert.deepEqual(last[0], ['orders.notification', 'ok', '']);
   assert.deepEqual(last[1], ['orders.notification', 'ignored', 'repetido']);
   assert.deepEqual(last[2], ['orders.notification', 'ignored', 'tienda sin vincular']);
-  assert.deepEqual(last[3], ['store.provisioned', 'ignored', 'evento no atendido']);
+  assert.deepEqual(last[3], ['orders.release', 'ignored', 'evento no atendido']);
   assert.equal(last[4][1], 'error');
   assert.equal(events().find((e) => e.orderId === 'o-lllll1' && e.outcome === 'ok').tenantId, 't1');
 
@@ -644,6 +648,149 @@ test('si Uber rechaza el menú se dice por qué y no se marca como publicado', a
   assert.match(r.text, /precio inválido/);
   assert.equal(uberLinkDoc().menuPublishedAt, before);
   assert.equal(events().at(-1).eventType, 'api.menu');
+});
+
+test('los extras que elige el cliente en Uber descuentan su ingrediente, y el producto se reconoce por el id del menú', async () => {
+  const stock = (id) => state.ingredients.find((i) => i.id === id).stock;
+  const [sirope0, leche0] = [stock('i-sirope'), stock('i-leche')];
+  uberOrders['o-nnnnn1'] = sample('o-nnnnn1', {
+    cart: { items: [{
+      id: 'f-latte', title: 'Café con leche', quantity: 2, price: { unit_price: { amount: 4000 } },
+      selected_modifier_groups: [{ selected_items: [{ id: 'f-latte_i-sirope', title: 'Sirope', quantity: 2 }, { id: 'ajeno_x', title: 'Otro', quantity: 1 }] }],
+    }] },
+  });
+  await hook(body('orders.notification', 'o-nnnnn1'));
+  const o = uberOrder('o-nnnnn1');
+  assert.equal(o.items[0].foodId, 'f-latte', 'por id, aunque el título sea otro');
+  assert.deepEqual(o.items[0].options.map((x) => [x.ingredientId, x.quantity, x.amount]), [['i-sirope', 2, 1]], 'solo los extras que reconocemos');
+  // 2 cafés × (2 siropes) = 4 siropes; la receta base gasta 200 de leche por café
+  assert.equal(sirope0 - stock('i-sirope'), 4);
+  assert.equal(leche0 - stock('i-leche'), 400);
+  assert.deepEqual(o.stockLines.map((l) => l.ingredientId).sort(), ['i-leche', 'i-sirope']);
+});
+
+test('el menú se publica de nuevo solo cuando cambia un producto, y se puede apagar', async () => {
+  const n = () => putMenus().length;
+  const price = (v) => api.call('PUT', '/foods/f-latte', { token: admin(), body: { price: v } });
+  const sentPrice = () => JSON.parse(putMenus().pop().body).items.find((i) => i.id === 'f-latte').price_info.price;
+
+  let before = n();
+  assert.equal((await price(45)).status, 200);
+  await settle();
+  assert.equal(n(), before + 1);
+  assert.equal(sentPrice(), 4500);
+  assert.equal(uberLinkDoc().menuDirty, false);
+
+  // Varios cambios seguidos: lo último llega a Uber sin una subida por cada uno
+  before = n();
+  await price(46);
+  await price(47);
+  await price(48);
+  await settle(); await settle();
+  assert.ok(n() - before >= 1 && n() - before <= 3);
+  assert.equal(sentPrice(), 4800);
+
+  // Una categoría nueva también cuenta
+  before = n();
+  assert.equal((await api.call('POST', '/menus', { token: admin(), body: { name: 'Postres' } })).status, 201);
+  await settle();
+  assert.equal(n(), before + 1);
+
+  // Si Uber falla, queda anotado y se sube al abrir la caja
+  before = n();
+  uberFails = 500;
+  await price(49);
+  await settle();
+  uberFails = null;
+  assert.equal(uberLinkDoc().menuDirty, true);
+  assert.equal(n(), before + 1, 'lo intentó una vez');
+  await closeCash();
+  await openCash();
+  await settle(); await settle();
+  assert.equal(n(), before + 2);
+  assert.equal(sentPrice(), 4900);
+  assert.equal(uberLinkDoc().menuDirty, false);
+
+  // Apagado: se anota que hay cambios, pero no se sube solo
+  assert.equal((await api.call('PUT', '/integrations/uber/menu/auto', { token: cashier(), body: { autoPublish: false } })).status, 403);
+  assert.equal((await api.call('PUT', '/integrations/uber/menu/auto', { token: admin(), body: { autoPublish: 'no' } })).status, 400);
+  assert.equal((await api.call('PUT', '/integrations/uber/menu/auto', { token: admin(), body: { autoPublish: false } })).status, 200);
+  before = n();
+  await price(50);
+  await settle();
+  assert.equal(n(), before);
+  const st = (await api.call('GET', '/integrations/uber/menu', { token: cashier() })).json;
+  assert.deepEqual([st.dirty, st.autoPublish], [true, false]);
+  assert.equal((await api.call('POST', '/integrations/uber/menu', { token: admin(), body: {} })).status, 200);
+  assert.equal((await api.call('GET', '/integrations/uber/menu', { token: cashier() })).json.dirty, false);
+  await api.call('PUT', '/integrations/uber/menu/auto', { token: admin(), body: { autoPublish: true } });
+});
+
+test('revisión periódica: la corre un reloj externo con su clave y solo mira tiendas con la caja abierta', async () => {
+  process.env.CRON_SECRET = 'reloj-secreto';
+  const sweep = (auth) => realFetch(`${api.base}/integrations/uber/sweep`, { headers: auth ? { Authorization: auth } : {} });
+  delete process.env.CRON_SECRET;
+  assert.equal((await sweep('Bearer reloj-secreto')).status, 503, 'sin CRON_SECRET en el servidor');
+  process.env.CRON_SECRET = 'reloj-secreto';
+  assert.equal((await sweep()).status, 401);
+  assert.equal((await sweep('Bearer otra')).status, 401);
+
+  uberOrders['o-ooooo1'] = sample('o-ooooo1');
+  createdOrders = ['o-ooooo1']; // Uber lo tiene pendiente y nunca avisó
+  const r = await sweep('Bearer reloj-secreto');
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { checked: 1, recovered: 1, closed: 0 });
+  assert.ok(uberOrder('o-ooooo1'));
+
+  await closeCash();
+  uberOrders['o-ooooo2'] = sample('o-ooooo2');
+  createdOrders = ['o-ooooo2'];
+  assert.deepEqual(await (await sweep('Bearer reloj-secreto')).json(), { checked: 0, recovered: 0, closed: 0 }, 'sin caja abierta no mira');
+  assert.equal(uberOrder('o-ooooo2'), undefined);
+  createdOrders = [];
+  await openCash();
+  await settle(); await settle();
+  delete process.env.CRON_SECRET;
+});
+
+test('pedidos programados: se guardan marcados y con la hora de recogida que dice Uber', async () => {
+  uberOrders['o-ppppp1'] = sample('o-ppppp1', { estimated_ready_for_pickup_at: '2026-11-17T18:30:00Z' });
+  await hook(JSON.stringify({ event_type: 'orders.scheduled.notification', event_id: 'ev-p1', meta: { resource_id: 'o-ppppp1', user_id: STORE, status: 'pos' } }));
+  const o = uberOrder('o-ppppp1');
+  assert.equal(o.external.scheduled, true);
+  assert.equal(new Date(o.external.readyAt).toISOString(), '2026-11-17T18:30:00.000Z');
+  assert.equal(o.external.state, 'awaiting');
+  assert.equal(events().at(-1).outcome, 'ok');
+
+  uberOrders['o-ppppp2'] = sample('o-ppppp2');
+  await hook(body('orders.notification', 'o-ppppp2'));
+  assert.deepEqual([uberOrder('o-ppppp2').external.scheduled, uberOrder('o-ppppp2').external.readyAt], [false, null]);
+});
+
+test('tiempo de preparación de la tienda: se lee de Uber y se cambia (la ruta de cambio no está confirmada por Uber)', async () => {
+  assert.equal((await api.call('GET', '/integrations/uber/prep', { token: tokenFor('x', 'waiter', 't1') })).status, 403);
+  assert.equal((await api.call('GET', '/integrations/uber/prep', { token: tokenFor('beto', 'admin', 't2') })).json.linked, false);
+  assert.deepEqual((await api.call('GET', '/integrations/uber/prep', { token: cashier() })).json, { linked: true, prepMinutes: 15 });
+
+  for (const bad of [0, 181, 'x', 1.5]) assert.equal((await api.call('PUT', '/integrations/uber/prep', { token: cashier(), body: { minutes: bad } })).status, 400, String(bad));
+  const r = await api.call('PUT', '/integrations/uber/prep', { token: cashier(), body: { minutes: 20 } });
+  assert.deepEqual([r.status, r.json.prepMinutes], [200, 20]);
+  const sent = uberCalls.filter((c) => /update-store-prep-time$/.test(c.url)).pop();
+  assert.deepEqual([sent.method, JSON.parse(sent.body)], ['POST', { default_prep_time: 1200 }]);
+  assert.equal(uberLinkDoc().prepMinutes, 20);
+
+  prepFails = true;
+  const fail = await api.call('PUT', '/integrations/uber/prep', { token: cashier(), body: { minutes: 25 } });
+  prepFails = false;
+  assert.equal(fail.status, 502);
+  assert.match(fail.text, /Uber Eats Manager/);
+  assert.equal(events().at(-1).eventType, 'api.prep');
+  assert.equal(uberLinkDoc().prepMinutes, 20, 'no se anota lo que Uber no aceptó');
+
+  storeAvgPrep = null; // Uber no responde: se muestra lo último que guardamos
+  const down = await api.call('GET', '/integrations/uber/prep', { token: cashier() });
+  storeAvgPrep = 15;
+  assert.deepEqual([down.json.prepMinutes, !!down.json.error], [20, true]);
 });
 
 test('sin credenciales de Uber el webhook responde 503', async () => {

@@ -62,4 +62,15 @@ if (!process.env.VERCEL) {
   });
 }
 
+// Revisión periódica de pedidos de Uber que el aviso no entregó: solo cuando este archivo ES el servidor (no en las
+// pruebas) y sin Vercel (ahí no hay proceso continuo: usa un cron que llame a /integrations/uber/sweep).
+const sweepMinutes = Number(process.env.UBER_SWEEP_MINUTES ?? 2); // 0 = apagada
+if (require.main === module && !process.env.VERCEL && sweepMinutes > 0) {
+  setInterval(() => {
+    ensureConnection()
+      .then(() => require('./services/uber.service').sweepAll())
+      .catch((err) => console.error('[uber] revisión periódica:', err.message));
+  }, sweepMinutes * 60 * 1000).unref();
+}
+
 module.exports = app;

@@ -1,6 +1,10 @@
 const Joi = require('joi');
 const db = require('../database/mongodb');
 const { normalizeRecipe, RecipeError } = require('../models/inventory');
+const uberMenu = require('../services/uber.menu.service');
+
+// Si el negocio ya publicó su menú en Uber, un cambio aquí se manda solo (sin esperar y sin estorbar)
+const menuChanged = (req) => uberMenu.onMenuChanged(req.tenantId);
 
 async function listMenus(req, res) {
   try {
@@ -31,6 +35,7 @@ async function createMenu(req, res) {
       description: description || '',
       tenantId: req.tenantId,
     });
+    menuChanged(req);
     return res.status(201).json(created);
   } catch (err) {
     console.error(err);
@@ -42,6 +47,7 @@ async function updateMenu(req, res) {
   try {
     const updated = await db.UpdateMenu(req.params.id, req.body || {}, req.tenantId);
     if (!updated) return res.status(404).send('Menú no encontrado');
+    menuChanged(req);
     return res.status(200).json(updated);
   } catch (err) {
     console.error(err);
@@ -55,6 +61,7 @@ async function deleteMenu(req, res) {
     if (!result || result.deletedCount === 0) {
       return res.status(404).send('Menú no encontrado');
     }
+    menuChanged(req);
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -117,6 +124,7 @@ async function createFood(req, res) {
       extras: extra.extras || [],
       tenantId: req.tenantId,
     });
+    menuChanged(req);
     return res.status(201).json(created);
   } catch (err) {
     if (err instanceof RecipeError) return res.status(400).send(err.message);
@@ -143,6 +151,7 @@ async function updateFood(req, res) {
     }
     const updated = await db.UpdateFood(req.params.id, patch, req.tenantId);
     if (!updated) return res.status(404).send('Platillo no encontrado');
+    menuChanged(req);
     return res.status(200).json(updated);
   } catch (err) {
     if (err instanceof RecipeError) return res.status(400).send(err.message);
@@ -157,6 +166,7 @@ async function deleteFood(req, res) {
     if (!result || result.deletedCount === 0) {
       return res.status(404).send('Platillo no encontrado');
     }
+    menuChanged(req);
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error(err);

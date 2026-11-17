@@ -136,14 +136,19 @@
             Conexión: <strong>{{ uber.environment === 'production' ? 'Producción' : 'Pruebas (sandbox)' }}</strong>
           </p>
 
-          <form class="pass-form" @submit.prevent="linkUber">
-            <label>Store ID de tu tienda en Uber Eats
-              <input v-model.trim="uber.storeInput" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Pega aquí el Store ID" required />
-            </label>
-            <button type="submit" class="btn-primary" :disabled="uber.busy">{{ uber.storeId ? "Cambiar tienda" : "Vincular tienda" }}</button>
-          </form>
+          <UberConnect v-if="uber.loaded && uber.configured" :uber="uber" :choose="uberChoose" @changed="loadUber" @message="(m) => { message = m; messageIsError = false; }" />
+
+          <details class="uber-manual" :open="uber.loaded && !uber.oauth">
+            <summary>Vincular con el Store ID (avanzado)</summary>
+            <form class="pass-form" @submit.prevent="linkUber">
+              <label>Store ID de tu tienda en Uber Eats
+                <input v-model.trim="uber.storeInput" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Pega aquí el Store ID" required />
+              </label>
+              <button type="submit" class="btn-primary" :disabled="uber.busy">{{ uber.storeId ? "Cambiar tienda" : "Vincular tienda" }}</button>
+            </form>
+          </details>
           <p v-if="uber.storeId" class="ok" role="status">
-            Vinculada: <code>{{ uber.storeId }}</code>
+            Vinculada: <strong v-if="uber.storeName">{{ uber.storeName }}</strong> <code>{{ uber.storeId }}</code>
             <button type="button" class="link-btn" :disabled="uber.busy" @click="unlinkUber">Desvincular</button>
           </p>
 
@@ -226,6 +231,7 @@ import FocusPicker from "../components/FocusPicker.vue";
 import UberStoreStatus from "../components/UberStoreStatus.vue";
 import UberMetrics from "../components/UberMetrics.vue";
 import UberMenu from "../components/UberMenu.vue";
+import UberConnect from "../components/UberConnect.vue";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
 import { saveVenueSettings, venueStore } from "../venueStore";
@@ -377,12 +383,25 @@ async function removeInvite(i) {
 }
 
 // ——— Uber Eats ———
-const uber = reactive({ loaded: false, configured: false, environment: "sandbox", storeId: "", storeInput: "", busy: false, error: "" });
+const uber = reactive({
+  loaded: false, configured: false, oauth: false, environment: "sandbox", storeId: "", storeInput: "", storeName: "", storeAddress: "",
+  linkedVia: "", integrationEnabled: null, deprovisioned: false, busy: false, error: "",
+});
+const uberChoose = ref(false); // al volver de Uber con varias tiendas: toca elegir
+const UBER_RETURN = {
+  cancelled: "Cancelaste la conexión con Uber Eats.",
+  state: "El enlace de conexión caducó. Vuelve a intentarlo.",
+  taken: "Esa tienda ya está conectada a otro negocio.",
+};
 
 async function loadUber() {
   try {
     const s = await apiService.uberStatus();
-    Object.assign(uber, { loaded: true, configured: s.configured, environment: s.environment, storeId: s.storeId || "", storeInput: s.storeId || "" });
+    Object.assign(uber, {
+      loaded: true, configured: s.configured, environment: s.environment, storeId: s.storeId || "", storeInput: s.storeId || "",
+      oauth: !!s.oauth, storeName: s.storeName || "", storeAddress: s.storeAddress || "", linkedVia: s.linkedVia || "",
+      integrationEnabled: s.integrationEnabled ?? null, deprovisioned: !!s.deprovisioned,
+    });
   } catch {
     uber.loaded = false;
   }
@@ -408,9 +427,14 @@ async function unlinkUber() {
   uber.busy = true;
   uber.error = "";
   try {
-    await apiService.uberUnlink();
+    const r = await apiService.uberUnlink();
     uber.storeId = "";
     uber.storeInput = "";
+    await loadUber();
+    // Una tienda que activamos por OAuth sigue mandando pedidos que nadie atendería si Uber no la apagó
+    if (r.deactivated === false) {
+      uber.error = "Se desvinculó aquí, pero no pudimos apagarla en Uber Eats. Quita el acceso de MiRestaurante desde Uber Eats Manager o pídelo a tu gerente de Uber; si no, seguirán llegando pedidos que nadie atenderá.";
+    }
   } catch (e) {
     uber.error = e.response?.data || "No se pudo desvincular.";
   } finally {
@@ -518,6 +542,20 @@ onMounted(async () => {
     } else if (route.query.mp === "error") {
       pt.error = MP_RETURN[route.query.reason] || "No se pudo conectar tu cuenta de Mercado Pago.";
     }
+    router.replace({ query: {} });
+  } else if (route.query.s === "integraciones") {
+    open("integraciones");
+    const r = route.query.uber;
+    if (r === "activated") {
+      message.value = "Tienda de Uber Eats conectada.";
+      messageIsError.value = false;
+    } else if (r === "removed") {
+      message.value = "La tienda se quitó de Uber Eats por completo.";
+      messageIsError.value = false;
+    } else if (r === "choose") uberChoose.value = true;
+    else if (r === "none") uber.error = "Tu cuenta de Uber no tiene tiendas de Uber Eats.";
+    else if (r === "taken") uber.error = UBER_RETURN.taken;
+    else if (r === "error") uber.error = UBER_RETURN[route.query.reason] || "No se pudo conectar tu tienda con Uber Eats.";
     router.replace({ query: {} });
   }
 });

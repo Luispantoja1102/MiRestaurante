@@ -41,6 +41,7 @@ function createFakeDb() {
     UpdateOrder: async (id, patch, t) => { const o = state.orders.find((x) => x.id === id && x.tenantId === t); if (!o) return null; Object.assign(o, patch); return o; },
     // —— inventario (misma semántica que database/mongodb.js)
     GetMenus: async (t) => state.menus.filter((m) => m.tenantId === t),
+    CreateMenu: async (d) => { const m = { ...d, id: `m${state.menus.length + 1}` }; state.menus.push(m); return m; },
     GetIngredients: async (t) => state.ingredients.filter((i) => i.tenantId === t).sort((a, b) => a.name.localeCompare(b.name)),
     GetIngredientById: async (id, t) => state.ingredients.find((i) => i.id === id && i.tenantId === t) || null,
     CreateIngredient: async (d) => { const i = { ...d, id: String(new ObjectId()) }; state.ingredients.push(i); return i; },
@@ -64,9 +65,12 @@ function createFakeDb() {
     GetStockMovements: async (t, { ingredientId, limit = 50 } = {}) => state.movements.filter((m) => m.tenantId === t && (!ingredientId || m.ingredientId === ingredientId)).sort((a, b) => b.at - a.at).slice(0, limit),
     GetOrderByExternal: async (p, id) => state.orders.find((o) => o.external?.provider === p && o.external?.orderId === String(id)) || null,
     GetIntegrationByStore: async (p, s) => (state.integrations ||= []).find((i) => i.provider === p && i.storeId === String(s)) || null,
-    GetIntegrationByTenant: async (p, t) => (state.integrations ||= []).find((i) => i.provider === p && i.tenantId === String(t)) || null,
+    GetIntegrationByTenant: async (p, t) => { const i = (state.integrations ||= []).find((x) => x.provider === p && x.tenantId === String(t)); return i ? { ...i } : null; }, // copia, como Mongo
     SaveIntegration: async (p, t, d) => { const list = (state.integrations ||= []); let i = list.find((x) => x.provider === p && x.tenantId === String(t)); if (!i) { i = { provider: p, tenantId: String(t) }; list.push(i); } Object.assign(i, d); return i; },
     DeleteIntegration: async (p, t) => { state.integrations = (state.integrations || []).filter((i) => !(i.provider === p && i.tenantId === String(t))); },
+    SaveUberPending: async (t, d) => { (state.uberPending ||= {})[String(t)] = { ...d, tenantId: String(t) }; },
+    GetUberPending: async (t) => (state.uberPending ||= {})[String(t)] || null,
+    DeleteUberPending: async (t) => { delete (state.uberPending ||= {})[String(t)]; },
     AddUberEvent: async (d) => { (state.uberEvents ||= []).push(d); },
     ListUberEvents: async ({ tenantId, limit = 100 } = {}) => [...(state.uberEvents ||= [])].filter((e) => !tenantId || e.tenantId === String(tenantId)).reverse().slice(0, limit),
     ListUberOrdersSince: async (t, since) => state.orders.filter((o) => o.source === 'uber' && (!t || o.tenantId === String(t)) && new Date(o.createdAt) >= since),

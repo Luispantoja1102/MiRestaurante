@@ -6,6 +6,8 @@
     </p>
     <p v-else class="mn-line mn-warn">Aún no has publicado tu menú: Uber Eats no sabe qué vendes.</p>
 
+    <p v-if="m.published && m.dirty" class="mn-line mn-warn">Hay cambios en tus productos que todavía no están en Uber Eats.</p>
+
     <div class="mn-row">
       <label>Disponible desde <input v-model="open" type="time" required /></label>
       <label>hasta <input v-model="close" type="time" required /></label>
@@ -14,6 +16,10 @@
       Publicar <strong>reemplaza todo el menú</strong> que tengas en Uber Eats por el de MiRestaurante ({{ m.foods }} productos). Después, un
       producto se marca agotado solo cuando se acaba un ingrediente de su receta, y vuelve a estar disponible al reponerlo.
     </p>
+    <label v-if="m.published" class="mn-auto">
+      <input type="checkbox" :checked="m.autoPublish" :disabled="busy" @change="toggleAuto($event.target.checked)" />
+      Actualizar el menú en Uber Eats solo cuando cambie un producto, categoría, precio o receta
+    </label>
     <p v-if="m.outOfStock.length" class="mn-out">Agotados ahora: {{ m.outOfStock.join(", ") }}</p>
 
     <div class="mn-actions">
@@ -30,7 +36,7 @@
 import { onMounted, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 
-const m = reactive({ published: false, publishedAt: null, hours: { open: "00:00", close: "23:59" }, items: 0, foods: 0, outOfStock: [] });
+const m = reactive({ published: false, publishedAt: null, hours: { open: "00:00", close: "23:59" }, items: 0, foods: 0, outOfStock: [], dirty: false, autoPublish: true });
 const open = ref("00:00");
 const close = ref("23:59");
 const busy = ref(false);
@@ -46,6 +52,19 @@ async function load() {
     close.value = m.hours.close;
   } catch {
     err.value = "No se pudo leer el estado del menú.";
+  }
+}
+
+async function toggleAuto(value) {
+  busy.value = true;
+  err.value = "";
+  try {
+    await apiService.uberSetAutoPublish(value);
+    m.autoPublish = value;
+  } catch (e) {
+    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar el ajuste.";
+  } finally {
+    busy.value = false;
   }
 }
 
@@ -75,6 +94,7 @@ onMounted(load);
 .mn-row { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.9rem; }
 .mn-row label { display: inline-flex; align-items: center; gap: 0.4rem; }
 .mn-row input { min-height: 2rem; border-radius: 0.5rem; border: 1px solid var(--mirestaurante-line); background: var(--mirestaurante-panel); color: var(--mirestaurante-ink); font: inherit; }
+.mn-auto { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.85rem; }
 .mn-hint { margin: 0; font-size: 0.8rem; color: var(--mirestaurante-muted); }
 .mn-out { margin: 0; font-size: 0.85rem; color: var(--mirestaurante-danger); font-weight: 600; }
 .mn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }

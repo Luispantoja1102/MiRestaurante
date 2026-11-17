@@ -4,7 +4,7 @@ Fase 7 de [[MiRestaurante/Decisiones/2026-11-16 Plan Uber Eats a producción]]. 
 
 ## 0. Dónde estamos
 
-Hecho y probado **solo con un Uber simulado**: recibir pedidos por webhook firmado, aceptar / rechazar / cancelar con motivos, hora de listo, alergias y notas, entrega propia, estado de la tienda (pausa con la caja), tasa de aceptación, bitácora, recuperación de pedidos perdidos, menú y agotados. Detalle en las notas de sesión enlazadas en [[MiRestaurante/MiRestaurante]].
+Hecho y probado **solo con un Uber simulado**: activar la tienda del comercio por OAuth, recibir pedidos por webhook firmado, aceptar / rechazar / cancelar con motivos, hora de listo, alergias y notas, entrega propia, estado de la tienda (pausa con la caja), tasa de aceptación, bitácora, recuperación de pedidos perdidos, menú y agotados. Detalle en las notas de sesión enlazadas en [[MiRestaurante/MiRestaurante]].
 
 **Nada se ha probado contra Uber real todavía.** Falta el Store ID de la tienda de prueba (solicitud de «Set up test stores» ya enviada a Uber).
 
@@ -18,16 +18,16 @@ Hecho y probado **solo con un Uber simulado**: recibir pedidos por webhook firma
 | Aceptar, rechazar y **cancelar** con motivos permitidos | Hecho |
 | Rechazar pedidos con alergias o indicaciones que no se puedan mostrar | Hecho (se muestran todas y se declara `fields_relayed`; el rechazo `SPECIAL_INSTRUCTIONS` está en el modal) |
 | Leer y cambiar el estado de la tienda | Hecho |
-| **Gestión de la integración**: activar, consultar, actualizar y quitar (`/pos_data`) | **Falta** (es la fase 4, pospuesta) |
-| **Update Store Prep Time** (tiempo de preparación de la tienda) | **Falta**: el endpoint está en la página *Store API Suite*, que no pude leer |
+| **Gestión de la integración**: activar, consultar, actualizar y quitar (`/pos_data`) | Hecho (fase 4): activar (`POST`), consultar (`GET`) y apagar (`PATCH`). **Quitar del todo (`DELETE`) no**: exige el token del comercio, que no conservamos. **(confirmar con Uber)** si apagar basta |
+| **Update Store Prep Time** (tiempo de preparación de la tienda) | Hecho **sin respaldo oficial**: se lee `avg_prep_time` (documentado) y se cambia con `POST /v1/delivery/store/{id}/update-store-prep-time` (fuentes de terceros; la página de Uber no carga). **(confirmar con Uber)** ruta y cuerpo |
 | Menú V2 completo (si se actualiza el menú desde el sistema) | Hecho, con huecos «donde aplique»: etiquetas fiscales y *Tax Area ID* de México |
 
-**Las dos primeras filas con «Falta» pueden hacer que Uber no apruebe.** Recomiendo cerrarlas antes de solicitar la verificación (fase 4 y leer el tiempo de preparación).
+**Lo que más puede frenar la aprobación ya no es un hueco sino dos confirmaciones**: la ruta real del tiempo de preparación y si Uber acepta «apagar» donde pide «quitar» (ya existe también «Quitar la tienda por completo», que pide autorizar de nuevo). Preguntarlas a Uber antes de solicitar la verificación.
 
 ### 1.2 Avisos que hoy ignoramos (revisar si aplican a tus tiendas)
 
-- `orders.scheduled.notification` (pedidos programados, solo tiendas con ese modo habilitado).
-- `store.provisioned` / `store.deprovisioned` (llegan con la activación; los atiende la fase 4).
+- `orders.scheduled.notification` (pedidos programados): **ya se guardan**, marcados y con la hora de recogida estimada que da Uber; Uber no documenta la hora de entrega ni la ventana de aceptación de un programado (se usan los 11.5 min de siempre). Probarlo con una tienda que los tenga habilitada.
+- `store.provisioned` / `store.deprovisioned`: ya se atienden (confirman la activación y marcan la tienda sin acceso), pero su contenido no está documentado; se busca la tienda donde pueda venir.
 - `order.fulfillment_issues.resolved` y `orders.release` (solo si se usan ajustes de pedido o liberación rápida).
 
 ### 1.3 Supuestos que hay que confirmar en el sandbox (la documentación se contradice o es ambigua)
@@ -38,13 +38,27 @@ Hecho y probado **solo con un Uber simulado**: recibir pedidos por webhook firma
 - [ ] Los motivos de cancelación y el permiso de entrega propia (`eats.store.orders.restaurantdelivery.status`).
 - [ ] Los permisos de estado de tienda (`eats.store`, `eats.store.status.write`) y del aviso `eats.store.status.notification`.
 - [ ] Menú: claves de idioma (mandamos `es_mx` y `en_us`), `tax_rate: 8` (IVA que se suma; la alternativa es `vat_rate_percentage`), máximo de cantidad de cada extra, largos de título.
+- [ ] **Activación por OAuth:** que Uber devuelva el `state` en la redirección, la dirección de autorización de cada entorno (sandbox: `sandbox-login.uber.com`; producción: `auth.uber.com`), que acepte el cambio de código en formulario normal (sus ejemplos usan `multipart`), el cuerpo de `POST pos_data` (mandamos `is_order_manager` e `integrator_store_id`), y qué responde `PATCH pos_data` (su página no existe).
+- [ ] Si la cuenta de las tiendas de prueba puede autorizar a MiRestaurante (hasta que Uber entregue la tienda y la cuenta no se sabe).
+- [ ] **Tiempo de preparación:** la ruta `.../update-store-prep-time` y su cuerpo (`default_prep_time` en segundos) vienen de terceros y de rutas antiguas; Uber debe confirmarlos.
+- [ ] **Extras:** que `selected_modifier_groups[].selected_items[].id` traiga el id que publicamos (`producto_ingrediente`) y que su `quantity` sea por unidad del producto.
 - [ ] Umbral del piloto: *Going Live* dice 98 % y *Quality* dice 99.9 % de meta y 99 % de límite.
 - [ ] Cómo se enciende la integración el día de lanzamiento: *Going Live* dice «PATCH Update POS Status» con `pos_integration_enabled`; la referencia de activación marca ese indicador como obsoleto.
+
+### 1.4 Errores reales de Uber al conectar (vistos en el sandbox el 2026-11-16)
+
+La pantalla de Uber «Error en la autorización» aparece **antes** de volver a MiRestaurante:
+
+- **«Solicitud no válida. Hubo un error inesperado.»** → la dirección de redirección que mandamos no era una URL. Causa que se dio: el `.env` con el nombre de la variable repetido (`UBER_EATS_REDIRECT_URI=UBER_EATS_REDIRECT_URI=https://...`). Revisar que la línea tenga el nombre una sola vez y reiniciar el backend.
+- **«Solicitud no válida. No hay un URI de redireccionamiento para este usuario.»** → la URL es válida pero **no está registrada** en la aplicación de Uber. Registrar en el panel (sección de autenticación de la app, *Redirect URIs*) exactamente la misma de `UBER_EATS_REDIRECT_URI` y guardar. Debe coincidir carácter por carácter (`https`, dominio, `/api/`, sin diagonal final).
+- Con un túnel de prueba, si cambia su dirección hay que actualizar el `.env` (y reiniciar) **y** el panel de Uber.
+- Después de registrarla, **funcionó** el flujo de autorización de punta a punta contra el sandbox real.
 
 ## 2. Pruebas en el sandbox (antes de la verificación)
 
 Con la tienda de prueba vinculada en **Ajustes > Uber Eats** y un túnel (o dominio) para el webhook:
 
+- [ ] **Conectar con Uber Eats** desde Ajustes: con una tienda se activa sola; con varias aparece el selector; la tienda queda «Conectada»; desvincular la apaga en Uber.
 - [ ] Pedido de recoger y pedido con reparto de Uber: llegan con alerta y sonido; aceptar con «Listo en»; cobra como Plataforma; llega a cocina o queda «Listo» según el enfoque.
 - [ ] Rechazar con cada motivo; dejar que se venza (11.5 min) y revisar que queda como perdido.
 - [ ] Cancelar un pedido ya aceptado con cada motivo; que Uber cancele uno aceptado → sale del cierre de caja.
@@ -60,10 +74,11 @@ Con la tienda de prueba vinculada en **Ajustes > Uber Eats** y un túnel (o domi
 ## 3. Servidor de producción
 
 - [ ] **Dominio estable con https** para el webhook (un túnel gratuito cambia de dirección y no sirve). URL del webhook: `https://<tu-dominio>/api/integrations/uber/webhook` (tanto Vercel como nginx usan el prefijo `/api`).
-- [ ] Variables de entorno de producción: `UBER_EATS_ENV=production`, `UBER_EATS_CLIENT_ID` y `UBER_EATS_CLIENT_SECRET` de la **aplicación de producción**; **quitar** `UBER_EATS_AUTH_URL` y `UBER_EATS_API_URL` (son solo para pruebas).
+- [ ] Variables de entorno de producción: `UBER_EATS_ENV=production`, `UBER_EATS_CLIENT_ID` y `UBER_EATS_CLIENT_SECRET` de la **aplicación de producción**, y `UBER_EATS_REDIRECT_URI=https://<tu-dominio>/api/integrations/uber/oauth/callback` (junto con `OAUTH_STATE_SECRET` y `TOKEN_ENC_KEY`, que ya usa Mercado Pago); **quitar** `UBER_EATS_AUTH_URL` y `UBER_EATS_API_URL` (son solo para pruebas).
 - [ ] Nunca pegar el Client Secret en un chat, captura o repositorio. El de pruebas ya apareció en una captura: regenerarlo.
 - [ ] En el panel de Uber: autenticación del webhook **Basic HMAC** con la *Signing Key* igual al Client Secret (así lo valida el código).
 - [ ] Responder rápido al webhook: Uber espera 200 con cuerpo vacío y reintenta con 500/502/503/504 hasta 7 envíos. Vigilar el arranque en frío si el backend corre como función sin servidor.
+- [ ] **Revisión periódica de pedidos perdidos:** en un servidor continuo (Docker) corre sola cada `UBER_SWEEP_MINUTES` (2 por defecto). En **Vercel** no hay proceso continuo: crear un cron que llame a `GET /api/integrations/uber/sweep` con `Authorization: Bearer <CRON_SECRET>` (definir `CRON_SECRET`; Vercel lo manda solo). Los crons frecuentes pueden requerir un plan de pago.
 - [ ] Copias de seguridad de Mongo activas; la bitácora (`uber_events`) se limpia sola a los 30 días.
 
 ## 4. Cuenta y aplicación de producción en Uber
@@ -71,7 +86,7 @@ Con la tienda de prueba vinculada en **Ajustes > Uber Eats** y un túnel (o domi
 - [ ] Crear una cuenta de Uber **de producción**, distinta de la de pruebas (no una cuenta de prueba generada por Uber).
 - [ ] Crear la aplicación de producción. **Una aplicación por cada URL de webhook distinta**: con una sola URL, una sola aplicación.
 - [ ] Mandar al soporte técnico de Uber (t.uber.com/integration-support) una solicitud con el `client_id` de producción para que **habiliten los permisos**. Pedir: `eats.order`, `eats.store.orders.read`, `eats.store`, `eats.store.status.write`, `eats.store.status.notification`, `eats.store.orders.restaurantdelivery.status` y, para la fase 4, `eats.pos_provisioning`.
-- [ ] Cuando confirmen: entrar al panel, **marcar y guardar** los permisos, y poner la URL del webhook (primaria).
+- [ ] Cuando confirmen: entrar al panel, **marcar y guardar** los permisos, poner la URL del webhook (primaria) y **registrar la URL de redirección** `https://<tu-dominio>/api/integrations/uber/oauth/callback` (debe ser exactamente la de `UBER_EATS_REDIRECT_URI`).
 - [ ] **(confirmar con Uber)** Las páginas dicen que estas APIs «pueden requerir aprobación por escrito» y la guía no explica los acuerdos o licencias del socio integrador. Preguntar qué contrato necesita firmar MiRestaurante como integrador de varios comercios.
 
 ## 5. Pedir la verificación
@@ -84,7 +99,7 @@ Con la tienda de prueba vinculada en **Ajustes > Uber Eats** y un túnel (o domi
 
 - [ ] Elegir **un** restaurante piloto, con la caja abierta durante su horario, un equipo avisado y un dispositivo con Caja siempre a la vista.
 - [ ] Avisar al **gerente de socio** de Uber la tienda y la fecha **al menos una semana antes**. Confirmar con él: aplicación de producción, URL del webhook y permisos.
-- [ ] Vincular la tienda piloto: hoy el comercio pega su Store ID en Ajustes; con la fase 4 será autorizando desde Uber.
+- [ ] Vincular la tienda piloto: el comercio entra a **Ajustes > Uber Eats > Conectar con Uber Eats** con la cuenta de Uber de su tienda (queda «Conectada, falta que Uber la encienda» hasta el lanzamiento). Avisarle antes que **MiRestaurante pasa a aceptar los pedidos en lugar de la tableta de Uber Eats**.
 - [ ] Día de lanzamiento: publicar el menú desde **Ajustes > Uber Eats**, encender la integración de pedidos (confirmar el método con Uber, ver 1.3) y dejar la tienda en línea.
 - [ ] Capacitar al equipo: **abrir la caja antes de abrir la tienda** (con la caja cerrada la tienda se pausa sola); aceptar o rechazar antes de 11 minutos (el sonido se repite cada 15 s); dar un toque en la página al empezar el turno y aceptar las notificaciones del navegador.
 - [ ] Revisar **cada día** la tasa de aceptación (Ajustes del negocio y pestaña Uber Eats de la plataforma) y los errores de la bitácora.
@@ -98,5 +113,5 @@ Con la tienda de prueba vinculada en **Ajustes > Uber Eats** y un túnel (o domi
 ## 8. Quién hace qué
 
 - **Tú / el negocio:** crear la cuenta y la aplicación de producción, hablar con soporte técnico y el gerente de socio de Uber, dominio y servidor de producción, elegir el piloto y capacitar al equipo, firmar lo que Uber pida.
-- **Código pendiente antes de solicitar:** fase 4 (activación de tiendas por OAuth y gestión de la integración) y el tiempo de preparación de la tienda.
+- **Código pendiente antes de solicitar:** ninguno conocido; quedan las confirmaciones con Uber de la sección 1.3.
 - **Lo que no puedo saber:** tiempos y exigencias de aprobación de Uber (acuerdos, cargos, plazos). Tampoco la tienda de prueba hasta que Uber la entregue.

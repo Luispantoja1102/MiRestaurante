@@ -101,6 +101,9 @@ async function ensureIndexes() {
     // Bitácora de avisos de Uber: se conserva 30 días
     await dbConnection.collection('uber_events').createIndex({ at: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
     await dbConnection.collection('uber_events').createIndex({ tenantId: 1, at: -1 });
+    // Autorización de Uber a medias (el comercio debe elegir tienda): caduca a los 15 minutos
+    await dbConnection.collection('uber_pending').createIndex({ createdAt: 1 }, { expireAfterSeconds: 15 * 60 });
+    await dbConnection.collection('uber_pending').createIndex({ tenantId: 1 }, { unique: true });
     await dbConnection.collection('point_connections').createIndex({ tenantId: 1 }, { unique: true });
     await dbConnection.collection('point_charges').createIndex({ tenantId: 1, clientSaleId: 1 });
     await dbConnection.collection('point_charges').createIndex({ mpOrderId: 1 });
@@ -760,6 +763,16 @@ async function SaveIntegration(provider, tenantId, data) {
 async function DeleteIntegration(provider, tenantId) {
   await dbConnection.collection('integrations').deleteOne({ provider, tenantId: String(tenantId) });
 }
+// Autorización de Uber pendiente de elegir tienda (el token va cifrado)
+async function SaveUberPending(tenantId, doc) {
+  await dbConnection.collection('uber_pending').replaceOne({ tenantId: String(tenantId) }, { ...doc, tenantId: String(tenantId) }, { upsert: true });
+}
+async function GetUberPending(tenantId) {
+  return dbConnection.collection('uber_pending').findOne({ tenantId: String(tenantId) });
+}
+async function DeleteUberPending(tenantId) {
+  await dbConnection.collection('uber_pending').deleteOne({ tenantId: String(tenantId) });
+}
 // Bitácora de Uber Eats y datos para la tasa de aceptación
 async function AddUberEvent(doc) {
   await dbConnection.collection('uber_events').insertOne(doc);
@@ -923,6 +936,7 @@ module.exports = {
   GetFoods, GetFoodById, CreateFood, UpdateFood, DeleteFood,
   GetOrders, GetAwaitingExternalOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, GetOrderByExternal, NextCounter,
   GetIntegrationByStore, GetIntegrationByTenant, SaveIntegration, DeleteIntegration,
+  SaveUberPending, GetUberPending, DeleteUberPending,
   AddUberEvent, ListUberEvents, ListUberOrdersSince, ListIntegrations,
   GetPointConnection, SavePointConnection, DeletePointConnection,
   CreatePointCharge, GetPointCharge, GetPointChargeBySale, GetPointChargeByMpOrderId, ListPointChargesSince, UpdatePointCharge, ClaimPointCharge, ReleasePointCharge,

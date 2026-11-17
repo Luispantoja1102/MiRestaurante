@@ -328,6 +328,27 @@ export const apiService = {
   pointCancelCharge(id: string) {
     return axios.post(`/point/charges/${id}/cancel`).then((r) => r.data);
   },
+  uberConnect() {
+    return axios.get('/integrations/uber/connect').then((r) => r.data as { url: string });
+  },
+  uberPending() {
+    return axios.get('/integrations/uber/pending').then((r) => r.data as { stores: { storeId: string; name: string; address: string }[] });
+  },
+  uberActivate(storeId: string) {
+    return axios.post('/integrations/uber/activate', { storeId }).then((r) => r.data);
+  },
+  uberSetAutoPublish(autoPublish: boolean) {
+    return axios.put('/integrations/uber/menu/auto', { autoPublish }).then((r) => r.data);
+  },
+  uberPrep() {
+    return axios.get('/integrations/uber/prep').then((r) => r.data as { linked: boolean; prepMinutes: number | null; error?: string });
+  },
+  uberSetPrep(minutes: number) {
+    return axios.put('/integrations/uber/prep', { minutes }).then((r) => r.data);
+  },
+  uberRemove() {
+    return axios.post('/integrations/uber/remove').then((r) => r.data as { url: string });
+  },
   uberMenuStatus() {
     return axios.get('/integrations/uber/menu').then((r) => r.data);
   },

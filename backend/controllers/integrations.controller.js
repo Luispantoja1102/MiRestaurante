@@ -1,10 +1,19 @@
 const db = require('../database/mongodb');
 const uber = require('../services/uber.service');
 const uberMenu = require('../services/uber.menu.service');
+const activation = require('../services/uber.activation.service');
 const inventory = require('../services/inventory.service');
 const { focusOf } = require('../models/venueMode');
 
 const STORE_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+// Cada tipo de aviso tiene su atención; los de pedidos están en uber.service
+const dispatch = (ev) => {
+  const type = ev?.event_type;
+  if (type === 'store.menu_refresh_request') return uberMenu.onRefreshRequest(ev);
+  if (type === 'store.provisioned' || type === 'store.deprovisioned') return activation.onStoreEvent(ev);
+  return uber.handleEvent(ev);
+};
 
 /** Webhook público de Uber: se acepta solo si la firma es válida. */
 async function uberWebhook(req, res) {
@@ -13,8 +22,7 @@ async function uberWebhook(req, res) {
     return res.status(401).send('Firma inválida');
   }
   try {
-    const ev = req.body;
-    uber.recordEvent(ev?.event_type === 'store.menu_refresh_request' ? await uberMenu.onRefreshRequest(ev) : await uber.handleEvent(ev));
+    uber.recordEvent(await dispatch(req.body));
     return res.status(200).end(); // Uber espera 200 con cuerpo vacío
   } catch (err) {
     // Un error pasajero (red, Uber caído) devuelve 500 para que Uber reintente; guardar es idempotente.
@@ -31,7 +39,13 @@ async function uberStatus(req, res) {
     return res.status(200).json({
       configured: uber.isConfigured(),
       environment: cfg.env,
+      oauth: activation.isOAuthConfigured(),
       storeId: link?.storeId || '',
+      storeName: link?.storeName || '',
+      storeAddress: link?.storeAddress || '',
+      linkedVia: link?.linkedVia || (link?.storeId ? 'manual' : ''),
+      integrationEnabled: link?.integrationEnabled ?? null,
+      deprovisioned: !!link?.deprovisioned,
       linkedAt: link?.updatedAt || null,
       autoPause: link?.autoPause !== false,
     });
@@ -49,7 +63,7 @@ async function uberLink(req, res) {
     if (taken && taken.tenantId !== String(req.tenantId)) {
       return res.status(409).send('Esa tienda ya está vinculada a otro negocio');
     }
-    const link = await db.SaveIntegration('uber', req.tenantId, { storeId, linkedBy: req.user?.username || null });
+    const link = await db.SaveIntegration('uber', req.tenantId, { storeId, linkedBy: req.user?.username || null, linkedVia: 'manual', storeName: null, storeAddress: null, integrationEnabled: null, deprovisioned: false });
     return res.status(200).json({ configured: uber.isConfigured(), environment: uber.config().env, storeId: link.storeId });
   } catch (err) {
     console.error(err);
@@ -59,8 +73,17 @@ async function uberLink(req, res) {
 
 async function uberUnlink(req, res) {
   try {
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    // Una tienda que activamos nosotros sigue mandando pedidos que nadie atendería: se apaga en Uber (si se puede)
+    let deactivated = null;
+    if (link?.storeId && link.linkedVia === 'oauth' && !link.deprovisioned) {
+      deactivated = await activation.deactivate(link.storeId).then(() => true, (err) => {
+        uber.recordEvent({ eventType: 'api.deactivate', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+        return false;
+      });
+    }
     await db.DeleteIntegration('uber', req.tenantId);
-    return res.status(200).json({ storeId: '' });
+    return res.status(200).json({ storeId: '', deactivated });
   } catch (err) {
     console.error(err);
     return res.status(500).send(err.message || 'Error al desvincular la tienda');
@@ -295,6 +318,48 @@ async function uberSetAutoPause(req, res) {
   }
 }
 
+// —— Conectar la tienda con Uber por OAuth
+async function uberConnect(req, res) {
+  try {
+    return res.status(200).json({ url: activation.authorizeUrl(req.tenantId) });
+  } catch (err) {
+    return res.status(err.status || 500).send(err.message);
+  }
+}
+
+// Lo abre el navegador al volver de Uber: SIN sesión (el state firmado dice de qué negocio es)
+async function uberOAuthCallback(req, res) {
+  const back = `${String(process.env.APP_URL || '').replace(/\/$/, '')}/settings?s=integraciones`;
+  try {
+    if (req.query.error || !req.query.code) throw new Error('cancelled');
+    const r = await activation.handleCallback({ code: String(req.query.code), state: String(req.query.state || '') });
+    return res.redirect(`${back}&uber=${r.outcome}`);
+  } catch (err) {
+    console.error('[uber oauth]', err.status || '', err.message, err.detail || '');
+    const reason = err.message === 'cancelled' ? 'cancelled' : err.status === 409 ? 'taken' : err.status === 400 ? 'state' : 'unknown';
+    return res.redirect(`${back}&uber=error&reason=${reason}`);
+  }
+}
+
+async function uberPending(req, res) {
+  try {
+    return res.status(200).json({ stores: await activation.pendingStores(req.tenantId) });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al leer las tiendas');
+  }
+}
+
+async function uberActivate(req, res) {
+  try {
+    return res.status(200).json(await activation.activatePending(req.tenantId, String(req.body?.storeId || '')));
+  } catch (err) {
+    if (err.status) return res.status(err.status).send(err.message);
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al activar la tienda');
+  }
+}
+
 // —— Tasa de aceptación del negocio y revisión de pedidos perdidos
 const DAYS = [7, 30];
 async function uberMetrics(req, res) {
@@ -345,4 +410,84 @@ async function uberPublishMenu(req, res) {
   }
 }
 
-module.exports = { uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder };
+// —— Quitar la tienda de Uber por completo (pide autorizar de nuevo)
+async function uberRemove(req, res) {
+  try {
+    return res.status(200).json({ url: await activation.startRemoval(req.tenantId) });
+  } catch (err) {
+    return res.status(err.status || 500).send(err.message);
+  }
+}
+
+// —— Tiempo de preparación de la tienda
+async function uberPrep(req, res) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(200).json({ linked: false });
+    try {
+      const s = await uber.storeDetails(link.storeId);
+      const mins = Number(s?.avg_prep_time);
+      return res.status(200).json({ linked: true, prepMinutes: Number.isFinite(mins) && mins > 0 ? mins : link.prepMinutes ?? null });
+    } catch (err) {
+      console.error('[uber]', err.message);
+      return res.status(200).json({ linked: true, prepMinutes: link.prepMinutes ?? null, error: 'No se pudo consultar a Uber Eats' });
+    }
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al leer el tiempo de preparación');
+  }
+}
+
+async function uberSetPrep(req, res) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+    const minutes = Number(req.body?.minutes);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 180) return res.status(400).send('El tiempo debe ser de 1 a 180 minutos');
+    try {
+      await uber.setPrepTime(link.storeId, minutes);
+    } catch (err) {
+      console.error('[uber]', err.message);
+      uber.recordEvent({ eventType: 'api.prep', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+      return res.status(502).send('Uber Eats no aceptó el cambio. Puedes ajustarlo en Uber Eats Manager (Ajustes > Tiempo de preparación).');
+    }
+    await db.SaveIntegration('uber', req.tenantId, { prepMinutes: minutes });
+    return res.status(200).json({ prepMinutes: minutes });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al cambiar el tiempo de preparación');
+  }
+}
+
+// —— Publicar el menú de nuevo solo cuando cambia (se puede apagar)
+async function uberSetAutoPublish(req, res) {
+  try {
+    if (typeof req.body?.autoPublish !== 'boolean') return res.status(400).send('Indica si se actualiza solo (true o false)');
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+    await db.SaveIntegration('uber', req.tenantId, { autoPublish: req.body.autoPublish });
+    return res.status(200).json({ autoPublish: req.body.autoPublish });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al guardar el ajuste');
+  }
+}
+
+// —— Revisión de todas las tiendas, para un reloj externo (p. ej. un cron de Vercel). Protegida por CRON_SECRET.
+const sameSecret = (given, secret) => {
+  const hash = (s) => require('crypto').createHash('sha256').update(String(s)).digest();
+  return require('crypto').timingSafeEqual(hash(given), hash(`Bearer ${secret}`));
+};
+async function uberSweep(req, res) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return res.status(503).send('CRON_SECRET no está configurado');
+  if (!sameSecret(req.get('Authorization') || '', secret)) return res.status(401).send('No autorizado');
+  try {
+    return res.status(200).json(await uber.sweepAll());
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error en la revisión');
+  }
+}
+
+module.exports = { uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder };

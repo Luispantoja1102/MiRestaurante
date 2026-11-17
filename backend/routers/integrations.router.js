@@ -13,8 +13,18 @@ router.put('/uber/store', requireAuth, requireActiveSubscription, requireRoles('
 router.put('/uber/autopause', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberSetAutoPause);
 router.get('/uber/menu', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberMenuStatus);
 router.post('/uber/menu', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberPublishMenu);
+router.put('/uber/menu/auto', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberSetAutoPublish);
+router.get('/uber/prep', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberPrep);
+router.put('/uber/prep', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberSetPrep);
+router.post('/uber/remove', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberRemove);
+router.get('/uber/sweep', integrations.uberSweep); // lo llama un reloj externo con CRON_SECRET, no un usuario
 router.get('/uber/metrics', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberMetrics);
 router.post('/uber/reconcile', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberReconcile);
+// Conectar la tienda con Uber por OAuth (solo el administrador)
+router.get('/uber/connect', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberConnect);
+router.get('/uber/oauth/callback', integrations.uberOAuthCallback); // público: lo abre el navegador al volver de Uber
+router.get('/uber/pending', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberPending);
+router.post('/uber/activate', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberActivate);
 router.put('/uber', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberLink);
 router.delete('/uber', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberUnlink);
 

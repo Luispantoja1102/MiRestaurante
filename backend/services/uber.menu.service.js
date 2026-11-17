@@ -11,6 +11,7 @@
  */
 const db = require('../database/mongodb');
 const uber = require('./uber.service');
+const { extraItemId } = require('../models/uberIds');
 
 const MENU_SCOPE = 'eats.store';
 const TAX_RATE = 8; // % que se suma al precio: igual que `normalizeOrder` (0.08)
@@ -28,7 +29,6 @@ function httpError(message, status = 400, detail) {
 const cents = (n) => Math.round(Number(n || 0) * 100);
 // Uber pide el texto por idioma; se manda en español y en inglés para no depender de cuál lea cada tienda
 const text = (s) => ({ translations: { es_mx: String(s).slice(0, 100), en_us: String(s).slice(0, 100) } });
-const extraItemId = (food, extra) => `${food.id}_${extra.ingredientId}`;
 const minutes = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3));
 
 /** Ids de Uber (productos y extras) que hoy están agotados. */
@@ -130,7 +130,7 @@ async function publishMenu(tenantId, hours = {}) {
     uber.recordEvent({ eventType: 'api.menu', storeId: link.storeId, tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
     throw httpError(`Uber Eats no aceptó el menú${err.detail ? `: ${err.detail}` : ''}`, 502);
   }
-  await db.SaveIntegration('uber', tenantId, { menuPublishedAt: new Date(), menuHours: { open, close }, publishedItemIds: built.itemIds, suspendedIds: [...built.outIds] });
+  await db.SaveIntegration('uber', tenantId, { menuPublishedAt: new Date(), menuHours: { open, close }, publishedItemIds: built.itemIds, suspendedIds: [...built.outIds], menuDirty: false });
   return { items: built.itemIds.length, categories: built.body.categories.length, outOfStock: built.outIds.size, hours: { open, close } };
 }
 
@@ -145,6 +145,8 @@ async function menuStatus(tenantId) {
     publishedAt: link?.menuPublishedAt || null,
     hours: link?.menuHours || { open: '00:00', close: '23:59' },
     items: (link?.publishedItemIds || []).length,
+    dirty: !!link?.menuDirty,
+    autoPublish: link?.autoPublish !== false,
     foods: foods.length,
     outOfStock: foods.filter((f) => out.has(String(f.id))).map((f) => f.name),
   };
@@ -193,6 +195,54 @@ function syncAvailability(tenantId, { force = false } = {}) {
   return next;
 }
 
+// Un cambio de producto, categoría, precio o receta llega a Uber solo si el negocio ya publicó su menú.
+// Una publicación a la vez por negocio: si hay cambios mientras sube, se sube otra vez al terminar.
+const publishing = new Map();
+function republish(tenantId) {
+  const key = String(tenantId);
+  const running = publishing.get(key);
+  if (running) {
+    running.again = true;
+    return running.promise;
+  }
+  const st = { again: false };
+  st.promise = (async () => {
+    try {
+      do {
+        st.again = false;
+        await publishMenu(tenantId).catch((err) => console.error('[uber] menú:', err.message)); // el error ya queda en la bitácora
+      } while (st.again);
+    } finally {
+      publishing.delete(key);
+    }
+  })();
+  publishing.set(key, st);
+  return st.promise;
+}
+
+/** Se llama al crear, editar o borrar productos y categorías. Nunca estorba ni lanza errores. */
+async function onMenuChanged(tenantId) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', tenantId);
+    if (!uber.isConfigured() || !link?.menuPublishedAt) return;
+    // Queda anotado que hay cambios sin subir: la pantalla lo dice y, si Uber falla, se sube al abrir la caja
+    await db.SaveIntegration('uber', tenantId, { menuDirty: true });
+    if (link.autoPublish !== false) await republish(tenantId);
+  } catch (err) {
+    console.error('[uber] menú:', err.message);
+  }
+}
+
+/** Al abrir la caja: si quedaron cambios sin subir (Uber falló o el servidor se reinició), se suben. */
+async function republishIfDirty(tenantId) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', tenantId);
+    if (uber.isConfigured() && link?.menuPublishedAt && link.menuDirty && link.autoPublish !== false) await republish(tenantId);
+  } catch (err) {
+    console.error('[uber] menú:', err.message);
+  }
+}
+
 /** Uber pide que se le vuelva a mandar el menú (aviso `store.menu_refresh_request`, con `store_id` arriba). */
 async function onRefreshRequest(ev) {
   const info = { eventType: ev?.event_type, storeId: ev?.store_id || null, orderId: null };
@@ -203,4 +253,4 @@ async function onRefreshRequest(ev) {
   return { ...info, tenantId: link.tenantId, outcome: 'ok', detail: 'menú publicado de nuevo' };
 }
 
-module.exports = { buildMenu, unavailableItemIds, publishMenu, menuStatus, syncAvailability, onRefreshRequest, httpError };
+module.exports = { buildMenu, unavailableItemIds, publishMenu, menuStatus, syncAvailability, onMenuChanged, republishIfDirty, onRefreshRequest, httpError };

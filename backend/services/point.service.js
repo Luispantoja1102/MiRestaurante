@@ -8,6 +8,8 @@
  */
 const crypto = require('crypto');
 const db = require('../database/mongodb');
+const { signState, readState } = require('../utils/oauth-state');
+const { encrypt, decrypt } = require('../utils/token-crypto');
 
 const MP_API = process.env.MP_API_URL || 'https://api.mercadopago.com'; // MP_API_URL solo para pruebas con un Mercado Pago simulado
 
@@ -18,27 +20,7 @@ function httpError(msg, status = 400, code) {
   return e;
 }
 
-/* ───────────── Cifrado de tokens (AES-256-GCM). TOKEN_ENC_KEY = 32 bytes en hex ───────────── */
-const KEY = () => {
-  const k = Buffer.from(String(process.env.TOKEN_ENC_KEY || ''), 'hex');
-  if (k.length !== 32) throw httpError('TOKEN_ENC_KEY inválida (32 bytes en hex).', 500);
-  return k;
-};
-function encrypt(plain) {
-  const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv('aes-256-gcm', KEY(), iv);
-  const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
-  return [iv, c.getAuthTag(), enc].map((b) => b.toString('hex')).join('.');
-}
-function decrypt(blob) {
-  const [iv, tag, enc] = String(blob).split('.').map((h) => Buffer.from(h, 'hex'));
-  const d = crypto.createDecipheriv('aes-256-gcm', KEY(), iv);
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(enc), d.final()]).toString('utf8');
-}
-
 /* ───────────── OAuth: conectar la cuenta de Mercado Pago del negocio ───────────── */
-const STATE_TTL_MS = 15 * 60 * 1000;
 const stateSecret = () => {
   const s = process.env.OAUTH_STATE_SECRET;
   if (!s) throw httpError('Falta OAUTH_STATE_SECRET en el servidor.', 500, 'not_configured');
@@ -53,29 +35,17 @@ function requireOAuthConfig() {
 
 function buildAuthUrl(tenantId) {
   requireOAuthConfig();
-  // El nonce lleva la hora de emisión: el enlace de autorización caduca
-  const nonce = `${Date.now().toString(36)}${crypto.randomBytes(6).toString('hex')}`;
-  const sig = crypto.createHmac('sha256', stateSecret()).update(`${tenantId}.${nonce}`).digest('hex');
   const q = new URLSearchParams({
     client_id: process.env.MP_CLIENT_ID,
     response_type: 'code',
     platform_id: 'mp',
-    state: `${tenantId}.${nonce}.${sig}`,
+    state: signState(tenantId, stateSecret()),
     redirect_uri: process.env.MP_OAUTH_REDIRECT,
   });
   return `https://auth.mercadopago.com.mx/authorization?${q}`;
 }
 
-function parseState(state) {
-  const [tenantId, nonce, sig] = String(state || '').split('.');
-  const expected = crypto.createHmac('sha256', stateSecret()).update(`${tenantId}.${nonce}`).digest('hex');
-  if (!sig || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
-    throw httpError('state inválido', 400);
-  }
-  const issuedAt = parseInt(String(nonce).slice(0, -12), 36);
-  if (!issuedAt || Date.now() - issuedAt > STATE_TTL_MS) throw httpError('El enlace de conexión caducó', 400);
-  return tenantId;
-}
+const parseState = (state) => readState(state, stateSecret());
 
 async function oauthToken(params) {
   const res = await fetch(`${MP_API}/oauth/token`, {

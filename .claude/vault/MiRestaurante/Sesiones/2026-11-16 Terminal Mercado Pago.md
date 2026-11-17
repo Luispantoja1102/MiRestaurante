@@ -11,7 +11,8 @@
 - **Decisiones:** una terminal por negocio (MiTiendita tiene varias cajas; aquí no hace falta). El cobro con terminal es **opcional**: sin terminal conectada, «Tarjeta» sigue registrándose a mano, que también sirve para terminales de BBVA, Santander, Banorte, Clip, etc. (no tienen API abierta de terminal).
 - **Cómo se probó:** 232 pruebas del backend (9 nuevas en `tests/point.test.js`, con Mercado Pago simulado); compila; en el navegador con base temporal y un Mercado Pago falso: volver del OAuth abre la sección, elegir terminal, venta en el mostrador con tarjeta (esperó en la terminal, registró la venta) y cancelar el cobro a mitad (no se registra la venta).
 - **Pendiente / dudas:**
-  - **No probado con una terminal real.** Los endpoints (`/terminals/v1/list`, `/terminals/v1/setup`, `/v1/orders`) siguen la documentación, igual que en MiTiendita, que tiene la misma advertencia.
+  - **Actualización: el dueño la probó con su terminal real el 2026-11-16 y funciona.** Lo siguiente se mantiene como estaba:
+  - ~~No probado con una terminal real.~~ Los endpoints (`/terminals/v1/list`, `/terminals/v1/setup`, `/v1/orders`) siguen la documentación, igual que en MiTiendita, que tiene la misma advertencia.
   - Falta crear la aplicación en el panel de Mercado Pago: Redirect URL `{API_PUBLIC_URL}/point/oauth/callback` y webhook de «Order» a `{API_PUBLIC_URL}/point/webhook`; y llenar las variables del `.env`.
   - No hay reembolso ni lista de cobros aprobados sin venta (MiTiendita sí). Si el total del servidor no coincide con lo cobrado, la venta se rechaza y el cobro queda aprobado sin usar; se reintenta con el mismo cobro, pero devolver el dinero hoy es en Mercado Pago.
   - El webhook de cobros de la terminal es independiente del de suscripciones (`/billing/webhook`), que usa su propia URL por suscripción.
