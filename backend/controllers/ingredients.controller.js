@@ -118,6 +118,7 @@ async function stockOp(req, res) {
     const updated = value.type === 'adjust'
       ? await db.SetStock(req.tenantId, current.id, inv.round3(value.quantity), meta)
       : await db.AdjustStock(req.tenantId, current.id, (value.type === 'waste' ? -1 : 1) * inv.round3(value.quantity), meta);
+    require('../services/uber.menu.service').syncAvailability(req.tenantId); // agotado o de nuevo disponible en Uber; sin esperar
     return res.status(200).json(publicIngredient(updated));
   } catch (err) {
     console.error(err);

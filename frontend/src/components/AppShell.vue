@@ -79,6 +79,21 @@
         </div>
       </section>
 
+      <section v-if="awaitingOrders.length && route.path !== '/orders'" class="alerts" aria-live="assertive" aria-label="Pedidos por responder">
+        <article class="alert al-assigned">
+          <span class="al-mark" aria-hidden="true">{{ awaitingOrders.length }}</span>
+          <div class="al-copy">
+            <p class="al-title">{{ awaitingOrders.length === 1 ? "Pedido de plataforma por aceptar" : "Pedidos de plataforma por aceptar" }}</p>
+            <p class="al-body">Acéptalos o recházalos en Caja: a los 11 minutos Uber los cancela.</p>
+          </div>
+          <button type="button" class="al-go" @click="router.push('/orders')">Ir a Caja</button>
+        </article>
+        <div v-if="platformAlerts.permission === 'default'" class="al-perm">
+          <span>Activa los avisos del navegador</span>
+          <button type="button" @click="enableOrderNotifications">Activar</button>
+        </div>
+      </section>
+
       <main class="pos-content">
         <slot />
       </main>
@@ -101,7 +116,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { venueStore } from "../venueStore";
 import { themeStore, toggleUiTheme } from "../themeStore";
 import { clearSession, canAccessRoute, hasRole } from "../authStore";
@@ -117,8 +132,10 @@ import {
   stopWaiterAlerts,
   enableSystemAlerts,
 } from "../waiterAlerts";
+import { awaitingOrders, platformAlerts, startOrderAlerts, stopOrderAlerts, enableOrderNotifications } from "../orderAlerts";
 
 const router = useRouter();
+const route = useRoute();
 const moreOpen = ref(false);
 const now = ref(new Date());
 const billingStatus = ref(null);
@@ -208,6 +225,7 @@ function goTo(a) {
 
 function logout() {
   stopWaiterAlerts();
+  stopOrderAlerts();
   moreOpen.value = false;
   clearSession();
   router.push("/login");
@@ -228,6 +246,7 @@ onMounted(() => {
   }, 30000);
   loadBilling();
   startWaiterAlerts();
+  startOrderAlerts();
 });
 onUnmounted(() => clearInterval(timer));
 </script>

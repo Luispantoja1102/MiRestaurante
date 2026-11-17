@@ -1,0 +1,19 @@
+# Sesión 2026-11-16 (Uber Eats: métricas, bitácora y pedidos perdidos, fase 5)
+
+- **Qué se pidió:** seguir el plan [[MiRestaurante/Decisiones/2026-11-16 Plan Uber Eats a producción]] (la fase 4 sigue pospuesta). Contexto: [[MiRestaurante/Sesiones/2026-11-16 Uber Eats estado de la tienda]].
+- **De la referencia de la API de Uber** (leída esta sesión): `GET /v1/eats/stores/{id}/created-orders?limit=` (scope `eats.store.orders.read`, el que ya usamos) devuelve solo ids de pedidos en `CREATED` (aún sin aceptar ni rechazar), de más viejo a más nuevo, sin paginación; el detalle sale de Get Order Details, que trae `current_state` (`CREATED`, `ACCEPTED`, `DENIED`, `FINISHED`, `CANCELED`). `canceled-orders` (últimas 2 h) se descartó: pide el scope `eats.orders` (la guía de pedidos usa `eats.order`) y Get Order Details ya dice si Uber canceló. La métrica de Uber es textual: **tasa de inyección = pedidos aceptados / pedidos enviados**, objetivo 99.9 %, por debajo de 99 % pueden revocar el acceso o deshabilitar tiendas, revisión diaria. No hay límites de peticiones documentados ni guía para avisos perdidos.
+- **Qué se hizo:**
+  - **Bitácora** (`uber_events`, se borra sola a los 30 días): cada aviso de Uber con su resultado (`ok`, `ignored` con motivo —repetido, tienda sin vincular, evento no atendido— o `error`), y cada fallo al hablar con Uber (`api.accept`, `api.deny`, `api.cancel`, `api.delivery`, `api.reconcile`). `handleEvent` ahora devuelve qué pasó en vez de `null`, y `ingestOrder` devuelve `{ order }` o `{ skipped }`.
+  - **Tasa de aceptación** (`acceptanceStats`): aceptados / (aceptados + rechazados + perdidos). «Perdido» = Uber lo canceló sin aceptarlo o se acabó el tiempo sin respuesta; lo que aún está dentro de sus 11.5 min no cuenta; un pedido aceptado y luego cancelado cuenta como aceptado. `GET /integrations/uber/metrics?days=7|30` por negocio (admin y caja), tarjeta en **Ajustes > Uber Eats** (verde ≥ 99.9 %, ámbar ≥ 99 %, rojo debajo) con los últimos pedidos perdidos.
+  - **Recuperar pedidos perdidos** (`reconcileStore`): pide a Uber los pedidos pendientes y guarda los que el aviso no trajo; revisa los que seguimos esperando y, si Uber los tiene `CANCELED` o `DENIED`, los cierra. Corre **solo al abrir la caja** (`onCashOpened`, sin esperar) y con el botón «Buscar pedidos perdidos» (`POST /integrations/uber/reconcile`).
+  - **Plataforma:** pestaña **Uber Eats** (solo admin de plataforma; `GET /platform/uber`): tasa global y por negocio (los peores primero) y los avisos y errores recientes, con filtro «Solo errores».
+- **Cómo se probó:** 247 pruebas del backend (5 nuevas en `tests/uber.test.js`); compila; en el navegador con base temporal y Uber simulado (2 aceptados, 1 rechazado, 1 cancelado por Uber sin atender y 1 que Uber tenía pendiente sin avisar): tasa 66.7 % → «Buscar pedidos perdidos» recupera 1 y cierra 1 → 50.0 %, y la pestaña de plataforma muestra la tasa, el negocio y los eventos `recuperado` y `cerrado`.
+- **Decisiones y límites:**
+  - Sin cron: la revisión automática corre al abrir la caja. Si un pedido se pierde con la caja abierta, el aviso de Uber se reintenta hasta 7 veces y queda el botón; un barrido periódico se puede añadir si hace falta.
+  - No se registran los avisos con firma inválida (podrían usarse para llenar la bitácora).
+  - Un pedido aceptado en la tableta de Uber (no por MiRestaurante) queda en «esperando» aquí; no se cambia.
+  - La tasa se calcula con los pedidos que Uber nos hizo llegar; si un aviso se pierde y nunca se recupera, Uber lo cuenta como enviado y nosotros no.
+- **Pendiente / dudas:**
+  - Nada probado contra el sandbox real (formato de `created-orders` y `current_state` tal como los describe la documentación).
+  - Tiempo de preparación de la tienda: segundo intento, sigue sin poder leerse la página *Store API Suite*.
+  - Fase 4 (pospuesta), fase 6 (menú y agotados) y fase 7 (salida a producción).

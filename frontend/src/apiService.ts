@@ -129,6 +129,9 @@ export const apiService = {
   getOrders() {
     return axios.get('/orders').then((r) => r.data);
   },
+  getAwaitingOrders() {
+    return axios.get('/orders/awaiting').then((r) => r.data);
+  },
   getOrdersById(orderId: string) {
     return axios.get(`/orders/${orderId}`).then((r) => r.data);
   },
@@ -325,6 +328,30 @@ export const apiService = {
   pointCancelCharge(id: string) {
     return axios.post(`/point/charges/${id}/cancel`).then((r) => r.data);
   },
+  uberMenuStatus() {
+    return axios.get('/integrations/uber/menu').then((r) => r.data);
+  },
+  uberPublishMenu(open: string, close: string) {
+    return axios.post('/integrations/uber/menu', { open, close }).then((r) => r.data);
+  },
+  uberMetrics(days = 7) {
+    return axios.get('/integrations/uber/metrics', { params: { days } }).then((r) => r.data);
+  },
+  uberReconcile() {
+    return axios.post('/integrations/uber/reconcile').then((r) => r.data);
+  },
+  platformUber(days = 7) {
+    return axios.get('/platform/uber', { params: { days } }).then((r) => r.data);
+  },
+  uberStoreStatus() {
+    return axios.get('/integrations/uber/store').then((r) => r.data);
+  },
+  uberSetStoreStatus(status: 'ONLINE' | 'PAUSED', minutes?: number) {
+    return axios.put('/integrations/uber/store', { status, minutes }).then((r) => r.data);
+  },
+  uberSetAutoPause(autoPause: boolean) {
+    return axios.put('/integrations/uber/autopause', { autoPause }).then((r) => r.data);
+  },
   uberStatus() {
     return axios.get('/integrations/uber').then((r) => r.data);
   },
@@ -334,8 +361,14 @@ export const apiService = {
   uberUnlink() {
     return axios.delete('/integrations/uber').then((r) => r.data);
   },
-  acceptExternalOrder(orderId: string) {
-    return axios.put(`/orders/${orderId}/external/accept`).then((r) => r.data);
+  acceptExternalOrder(orderId: string, prepMinutes?: number) {
+    return axios.put(`/orders/${orderId}/external/accept`, { prepMinutes }).then((r) => r.data);
+  },
+  cancelExternalOrder(orderId: string, code: string, details = '') {
+    return axios.put(`/orders/${orderId}/external/cancel`, { code, details }).then((r) => r.data);
+  },
+  externalDeliveryStatus(orderId: string, status: string) {
+    return axios.put(`/orders/${orderId}/external/delivery`, { status }).then((r) => r.data);
   },
   denyExternalOrder(orderId: string, code: string, explanation = '') {
     return axios.put(`/orders/${orderId}/external/deny`, { code, explanation }).then((r) => r.data);

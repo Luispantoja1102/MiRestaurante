@@ -22,6 +22,7 @@
     <PlatformSupport v-else-if="tab === 'support'" />
     <PlatformFinance v-else-if="tab === 'finance'" />
     <PlatformReferrers v-else-if="tab === 'referrers'" />
+    <PlatformUber v-else-if="tab === 'uber'" />
     <PlatformTeam v-else-if="tab === 'team'" />
   </div>
 </template>
@@ -36,6 +37,7 @@ import PlatformSupport from "../components/platform/PlatformSupport.vue";
 import PlatformReferrers from "../components/platform/PlatformReferrers.vue";
 import PlatformToday from "../components/platform/PlatformToday.vue";
 import PlatformTeam from "../components/platform/PlatformTeam.vue";
+import PlatformUber from "../components/platform/PlatformUber.vue";
 import "../platform.css";
 
 const router = useRouter();
@@ -47,6 +49,7 @@ const tabs = isAdmin
       { id: "today", label: "Hoy" },
       { id: "clients", label: "Clientes" },
       { id: "support", label: "Soporte" },
+      { id: "uber", label: "Uber Eats" },
       { id: "finance", label: "Finanzas" },
       { id: "referrers", label: "Referidos" },
       { id: "team", label: "Equipo" },

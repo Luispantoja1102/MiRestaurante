@@ -8,6 +8,7 @@ const adminOnly = [requireAuth, requireRoles('platform_admin')];
 
 router.get('/overview', ...adminOnly, platform.overview);
 router.get('/activity', ...adminOnly, platform.activity);
+router.get('/uber', ...adminOnly, platform.uberOverview);
 
 router.get('/finance', ...adminOnly, platform.financeSummary);
 router.post('/expenses', ...adminOnly, platform.createExpense);

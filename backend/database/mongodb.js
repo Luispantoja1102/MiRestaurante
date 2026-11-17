@@ -98,6 +98,9 @@ async function ensureIndexes() {
     // Una tienda de la plataforma pertenece a un solo negocio
     await dbConnection.collection('integrations').createIndex({ provider: 1, storeId: 1 }, { unique: true });
     await dbConnection.collection('integrations').createIndex({ provider: 1, tenantId: 1 }, { unique: true });
+    // Bitácora de avisos de Uber: se conserva 30 días
+    await dbConnection.collection('uber_events').createIndex({ at: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
+    await dbConnection.collection('uber_events').createIndex({ tenantId: 1, at: -1 });
     await dbConnection.collection('point_connections').createIndex({ tenantId: 1 }, { unique: true });
     await dbConnection.collection('point_charges').createIndex({ tenantId: 1, clientSaleId: 1 });
     await dbConnection.collection('point_charges').createIndex({ mpOrderId: 1 });
@@ -717,6 +720,10 @@ async function GetOrders(tenantId) {
   const filter = tenantId ? { tenantId } : {};
   return (await dbConnection.collection('orders').find(filter).sort({ createdAt: -1 }).toArray()).map(withId);
 }
+async function GetAwaitingExternalOrders(tenantId) {
+  const filter = { tenantId: String(tenantId), 'external.state': 'awaiting' };
+  return (await dbConnection.collection('orders').find(filter).sort({ createdAt: 1 }).toArray()).map(withId);
+}
 async function GetOrderById(id, tenantId) {
   const filter = oidFilter(id, tenantId);
   if (!filter) return null;
@@ -752,6 +759,21 @@ async function SaveIntegration(provider, tenantId, data) {
 }
 async function DeleteIntegration(provider, tenantId) {
   await dbConnection.collection('integrations').deleteOne({ provider, tenantId: String(tenantId) });
+}
+// Bitácora de Uber Eats y datos para la tasa de aceptación
+async function AddUberEvent(doc) {
+  await dbConnection.collection('uber_events').insertOne(doc);
+}
+async function ListUberEvents({ tenantId, limit = 100 } = {}) {
+  const filter = tenantId ? { tenantId: String(tenantId) } : {};
+  return dbConnection.collection('uber_events').find(filter).sort({ at: -1 }).limit(Math.min(Number(limit) || 100, 200)).toArray();
+}
+async function ListUberOrdersSince(tenantId, since) {
+  const filter = { source: 'uber', createdAt: { $gte: since }, ...(tenantId ? { tenantId: String(tenantId) } : {}) };
+  return (await dbConnection.collection('orders').find(filter).project({ tenantId: 1, status: 1, createdAt: 1, external: 1 }).toArray()).map(withId);
+}
+async function ListIntegrations(provider) {
+  return dbConnection.collection('integrations').find({ provider }).toArray();
 }
 // Terminal de cobro Mercado Pago Point: la conexión de cada negocio (tokens cifrados) y sus cobros
 async function GetPointConnection(tenantId) {
@@ -899,8 +921,9 @@ module.exports = {
   GetSettings, CreateSettings, UpdateSettings,
   GetMenus, GetMenuById, CreateMenu, UpdateMenu, DeleteMenu,
   GetFoods, GetFoodById, CreateFood, UpdateFood, DeleteFood,
-  GetOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, GetOrderByExternal, NextCounter,
+  GetOrders, GetAwaitingExternalOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, GetOrderByExternal, NextCounter,
   GetIntegrationByStore, GetIntegrationByTenant, SaveIntegration, DeleteIntegration,
+  AddUberEvent, ListUberEvents, ListUberOrdersSince, ListIntegrations,
   GetPointConnection, SavePointConnection, DeletePointConnection,
   CreatePointCharge, GetPointCharge, GetPointChargeBySale, GetPointChargeByMpOrderId, ListPointChargesSince, UpdatePointCharge, ClaimPointCharge, ReleasePointCharge,
   GetInvites, GetInviteByToken, CreateInvite, UpdateInvite, DeleteInvite,

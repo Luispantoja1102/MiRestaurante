@@ -1,0 +1,17 @@
+# Sesión 2026-11-16 (Uber Eats: ciclo completo del pedido, fase 2)
+
+- **Qué se pidió:** seguir el plan [[MiRestaurante/Decisiones/2026-11-16 Plan Uber Eats a producción]] con la fase 2. Contexto: [[MiRestaurante/Sesiones/2026-11-16 Uber Eats camino a producción]].
+- **De la referencia de la API de Uber** (leída esta sesión): aceptar admite `pickup_time` (segundos Unix; no existe `ready_for_pickup_time`) y `fields_relayed` (qué indicaciones mostramos); cancelar (`POST /v1/eats/orders/{id}/cancel`) pide un motivo de una lista (`OUT_OF_ITEMS`, `KITCHEN_CLOSED`, `RESTAURANT_TOO_BUSY`, `CANNOT_COMPLETE_CUSTOMER_NOTE`, `OTHER`, con `details` si es `OTHER`) y responde 404 si el pedido ya terminó; el estado de entrega (`.../restaurantdelivery/status`: `started`, `arriving`, `delivered`) usa **otro scope** (`eats.store.orders.restaurantdelivery.status`) y solo sirve para pedidos que reparte el restaurante; las alergias llegan en `special_requests[].allergy`; el código de rechazo para indicaciones que no se pueden cumplir es `SPECIAL_INSTRUCTIONS`. No existe página de «tiempo de preparación de la tienda» en la referencia leída.
+- **Qué se hizo:**
+  - **Alergias y notas visibles.** `mapOrder` pasa las alergias del cliente al texto del producto (`ALERGIA: lácteos, cacahuate · …`, primero para que no se corte), las notas del pedido (`cart.special_instructions`; antes se leía un campo que Uber no usa) y «con/sin cubiertos». Aviso rojo en la tarjeta de espera y notas ahora visibles en **Caja y Cocina** (antes solo salían en el ticket impreso). Como mostramos todo, al aceptar se declara `fields_relayed` completo; el rechazo con `SPECIAL_INSTRUCTIONS` queda como motivo en el modal para quien no pueda cumplirlas.
+  - **Hora de listo.** «Listo en 10/15/20/30/45 min» al aceptar → `pickup_time`.
+  - **Cancelar un pedido aceptado** (`PUT /orders/:id/external/cancel`, admin y caja): motivo obligatorio, avisa a Uber, devuelve inventario y deja el pedido en `cancelled` con pago `refunded` («Devuelto»). Mismo modal que rechazar.
+  - **Estado de entrega propia** (`PUT /orders/:id/external/delivery`): botones «Salió a entregar», «Va llegando» y «Entregado» solo si el pedido es `DELIVERY_BY_RESTAURANT`; el token de ese scope se pide aparte y solo cuando hace falta (si Uber no lo habilitó, no afecta al resto).
+  - **Corrección de un error que ya existía:** un pedido aceptado que luego se cancelaba (por Uber o por el restaurante) seguía contando como cobrado en el cierre de caja. Ahora pasa a `refunded` y sale del total.
+  - **Caja «Abiertos»** ahora incluye los pedidos de plataforma aceptados hasta entregarlos o cancelarlos (antes desaparecían al cobrarse y sus botones eran inalcanzables).
+- **Cómo se probó:** 238 pruebas del backend (5 nuevas en `tests/uber.test.js`); compila; en el navegador con base temporal y Uber simulado ampliado: pedido con alergia (aviso, notas, `pickup_time` y `fields_relayed` recibidos por Uber), entrega propia en 3 pasos, cancelación con motivo («Devuelto» en Todos, `OTHER` sin detalle deshabilitado).
+- **Pendiente / dudas:**
+  - Nada probado contra el sandbox real de Uber. En especial: la lista de motivos de cancelación y el scope de entrega propia, tal como los describe la documentación.
+  - El tiempo de preparación **de la tienda** no tiene página en la referencia leída; se revisa en la fase 3.
+  - El «Listo en» es un solo valor compartido por todas las tarjetas (se queda en lo último que se eligió).
+  - Fases 3 a 7 del plan.

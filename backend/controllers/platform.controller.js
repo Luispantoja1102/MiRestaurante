@@ -8,6 +8,7 @@ const mp = require('../services/mercadopago.service');
 const referrals = require('../services/referral.service');
 const partners = require('../services/partner.service');
 const support = require('../services/support.service');
+const uberStats = require('../services/uber.service');
 
 const PLAN_NAMES = { basic: 'Básico', pro: 'Pro' };
 const STATUS_NAMES = {
@@ -854,7 +855,36 @@ async function deleteStaff(req, res) {
   }
 }
 
+// Uber Eats en toda la plataforma: tasa de aceptación por negocio y lo que ha fallado
+async function uberOverview(req, res) {
+  try {
+    const days = [7, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+    const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+    const [orders, links, tenants, events] = await Promise.all([
+      db.ListUberOrdersSince(null, since),
+      db.ListIntegrations('uber'),
+      db.ListTenants(),
+      db.ListUberEvents({ limit: 100 }),
+    ]);
+    const names = new Map(tenants.map((t) => [String(t.id), t.name]));
+    const byTenant = new Map();
+    for (const o of orders) byTenant.set(o.tenantId, [...(byTenant.get(o.tenantId) || []), o]);
+    const strip = ({ missedOrders, ...s }) => s;
+    const rows = links.map((l) => ({ tenantId: l.tenantId, name: names.get(l.tenantId) || 'Negocio', storeId: l.storeId, ...strip(uberStats.acceptanceStats(byTenant.get(l.tenantId) || [])) }));
+    return res.status(200).json({
+      days,
+      totals: strip(uberStats.acceptanceStats(orders)),
+      tenants: rows.sort((a, b) => (a.rate ?? 2) - (b.rate ?? 2)), // los que van peor, primero
+      events: events.map((e) => ({ at: e.at, eventType: e.eventType, orderId: e.orderId, tenant: names.get(e.tenantId) || null, outcome: e.outcome, detail: e.detail || '' })),
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al leer Uber Eats');
+  }
+}
+
 module.exports = {
+  uberOverview,
   overview,
   listTenants,
   getTenant,

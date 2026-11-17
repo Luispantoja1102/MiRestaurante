@@ -6,6 +6,15 @@
 const db = require('../database/mongodb');
 const { stockLinesFor } = require('../models/inventory');
 
+// Lo que se vende o se devuelve puede agotar (o reanudar) productos en Uber: se avisa sin esperar y sin estorbar
+const syncUber = (tenantId) => {
+  try {
+    require('./uber.menu.service').syncAvailability(tenantId);
+  } catch (err) {
+    console.error('[uber] disponibilidad:', err.message);
+  }
+};
+
 /** Descuenta lo que consume el pedido. @returns las líneas descontadas ([] si nada tiene receta). */
 async function applySale({ tenantId, order, foodsById, by }) {
   const lines = stockLinesFor(order.items, foodsById);
@@ -18,6 +27,7 @@ async function applySale({ tenantId, order, foodsById, by }) {
     }
   }
   await db.UpdateOrder(order.id, { stockApplied: true, stockLines: lines }, tenantId);
+  syncUber(tenantId);
   return lines;
 }
 
@@ -31,6 +41,7 @@ async function restoreSale({ tenantId, order, by }) {
       console.error('[inventory] no se pudo devolver un ingrediente:', err.message);
     }
   }
+  syncUber(tenantId);
   return true;
 }
 

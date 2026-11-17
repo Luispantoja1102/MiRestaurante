@@ -1,5 +1,6 @@
 const db = require('../database/mongodb');
 const { normalizeCashSession } = require('../models/cashSession.model');
+const uber = require('../services/uber.service');
 
 function summarizeOrders(orders) {
   const totals = { cash: 0, card: 0, transfer: 0, platform: 0, other: 0, total: 0, count: orders.length };
@@ -40,6 +41,7 @@ async function open(req, res) {
     const session = await db.CreateCashSession(
       normalizeCashSession(req.body || {}, req.tenantId, req.user.username)
     );
+    uber.onCashOpened(req.tenantId); // reanuda la tienda de Uber si la pausó el cierre y revisa pedidos perdidos; sin esperar
     return res.status(201).json(session);
   } catch (err) {
     console.error(err);
@@ -78,6 +80,7 @@ async function close(req, res) {
       req.tenantId
     );
 
+    uber.syncStoreWithCash(req.tenantId, false); // pausa la tienda de Uber: sin caja nadie acepta pedidos; sin esperar
     return res.status(200).json({ session: closed, totals });
   } catch (err) {
     console.error(err);

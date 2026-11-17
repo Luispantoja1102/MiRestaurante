@@ -1,5 +1,6 @@
 const db = require('../database/mongodb');
 const uber = require('../services/uber.service');
+const uberMenu = require('../services/uber.menu.service');
 const inventory = require('../services/inventory.service');
 const { focusOf } = require('../models/venueMode');
 
@@ -12,11 +13,13 @@ async function uberWebhook(req, res) {
     return res.status(401).send('Firma inválida');
   }
   try {
-    await uber.handleEvent(req.body);
+    const ev = req.body;
+    uber.recordEvent(ev?.event_type === 'store.menu_refresh_request' ? await uberMenu.onRefreshRequest(ev) : await uber.handleEvent(ev));
     return res.status(200).end(); // Uber espera 200 con cuerpo vacío
   } catch (err) {
     // Un error pasajero (red, Uber caído) devuelve 500 para que Uber reintente; guardar es idempotente.
     console.error('[uber] webhook:', err.message);
+    uber.recordEvent({ eventType: req.body?.event_type || 'desconocido', orderId: req.body?.meta?.resource_id || null, storeId: req.body?.meta?.user_id || null, outcome: 'error', detail: err.message });
     return res.status(500).end();
   }
 }
@@ -30,6 +33,7 @@ async function uberStatus(req, res) {
       environment: cfg.env,
       storeId: link?.storeId || '',
       linkedAt: link?.updatedAt || null,
+      autoPause: link?.autoPause !== false,
     });
   } catch (err) {
     console.error(err);
@@ -74,6 +78,10 @@ async function loadAwaiting(req, res) {
   return order;
 }
 
+// Lo que falla al hablar con Uber queda en la bitácora para poder revisarlo después
+const logApiError = (req, order, action, err) =>
+  uber.recordEvent({ eventType: `api.${action}`, orderId: order.external?.orderId || null, storeId: order.external?.storeId || null, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+
 const uberFail = (res, err) => {
   console.error('[uber]', err.message);
   const expired = err.status === 404 || err.status === 409 || err.status === 400;
@@ -90,12 +98,17 @@ async function acceptUberOrder(req, res) {
     const session = await db.GetOpenCashSession(req.tenantId);
     if (!session) return res.status(400).send('Abre la caja antes de aceptar el pedido');
 
+    // «Listo en N minutos»: Uber lo usa para mandar al repartidor a tiempo
+    const prep = Number(req.body?.prepMinutes);
+    const prepMinutes = Number.isFinite(prep) && prep >= 1 && prep <= 180 ? Math.round(prep) : null;
+    const now = new Date();
+    const pickupAt = prepMinutes ? new Date(now.getTime() + prepMinutes * 60_000) : null;
     try {
-      await uber.acceptOrder(order.external.orderId, { externalRef: order.id });
+      await uber.acceptOrder(order.external.orderId, { externalRef: order.id, pickupTime: pickupAt && pickupAt.getTime() / 1000 });
     } catch (err) {
+      logApiError(req, order, 'accept', err);
       return uberFail(res, err);
     }
-    const now = new Date();
     // Sin pantalla de Cocina (enfoques «para llevar» y «con meseros») nadie lo marcaría listo: pasa directo a «Listo»
     const kitchen = focusOf(await db.GetSettings(req.tenantId)) === 'full';
     const updated = await db.UpdateOrder(
@@ -106,7 +119,7 @@ async function acceptUberOrder(req, res) {
         paymentMethod: 'platform',
         paidAt: now,
         cashSessionId: session.id,
-        external: { ...order.external, state: 'accepted', acceptedAt: now, acceptedBy: req.user?.username || null },
+        external: { ...order.external, state: 'accepted', acceptedAt: now, acceptedBy: req.user?.username || null, ...(pickupAt ? { pickupAt } : {}) },
         updatedAt: now,
       },
       req.tenantId
@@ -128,6 +141,7 @@ async function denyUberOrder(req, res) {
         explanation: String(req.body?.explanation || '').trim() || 'No se puede preparar',
       });
     } catch (err) {
+      logApiError(req, order, 'deny', err);
       return uberFail(res, err);
     }
     const now = new Date();
@@ -145,4 +159,190 @@ async function denyUberOrder(req, res) {
   }
 }
 
-module.exports = { uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder };
+// —— Pedido ya aceptado: cancelarlo o avisar cómo va la entrega
+async function loadAccepted(req, res) {
+  const order = await db.GetOrderById(req.params.id, req.tenantId);
+  if (!order) { res.status(404).send('Pedido no encontrado'); return null; }
+  if (order.external?.provider !== 'uber' || order.external?.state !== 'accepted') {
+    res.status(400).send('Este pedido de Uber Eats no está aceptado');
+    return null;
+  }
+  if (['cancelled', 'served'].includes(order.status)) {
+    res.status(400).send('Este pedido ya terminó');
+    return null;
+  }
+  return order;
+}
+
+// Uber responde 404 si el pedido ya está en un estado final (cancelado o entregado)
+const uberClosed = (res, err) => {
+  console.error('[uber]', err.message);
+  return res
+    .status(502)
+    .send(err.status === 404 ? 'Uber Eats ya no permite este cambio (el pedido terminó o fue cancelado). Actualiza la pantalla.' : 'No se pudo contactar a Uber Eats. Intenta de nuevo.');
+};
+
+async function cancelUberOrder(req, res) {
+  try {
+    const order = await loadAccepted(req, res);
+    if (!order) return null;
+    const code = uber.CANCEL_REASONS.includes(req.body?.code) ? req.body.code : 'OTHER';
+    const details = String(req.body?.details || '').trim();
+    if (code === 'OTHER' && !details) return res.status(400).send('Escribe el motivo de la cancelación');
+    try {
+      await uber.cancelOrder(order.external.orderId, { reason: code, details });
+    } catch (err) {
+      logApiError(req, order, 'cancel', err);
+      return uberClosed(res, err);
+    }
+    const now = new Date();
+    const patch = {
+      status: 'cancelled',
+      // Ya no se cobra a Uber: sale del cierre de caja
+      paymentStatus: order.paymentStatus === 'paid' ? 'refunded' : order.paymentStatus,
+      external: { ...order.external, state: 'canceled', closedAt: now, canceledBy: req.user?.username || null, cancelReason: code },
+      updatedAt: now,
+    };
+    const restored = await inventory.restoreSale({ tenantId: req.tenantId, order, by: req.user?.username }).catch(() => false);
+    if (restored) patch.stockRestored = true;
+    return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al cancelar el pedido');
+  }
+}
+
+// Solo pedidos que reparte el propio restaurante: salió (started), va llegando (arriving), entregado (delivered)
+async function deliveryStatusUberOrder(req, res) {
+  try {
+    const order = await loadAccepted(req, res);
+    if (!order) return null;
+    const status = req.body?.status;
+    if (!uber.DELIVERY_STATUSES.includes(status)) return res.status(400).send('Estado de entrega inválido');
+    if (order.external.type !== 'DELIVERY_BY_RESTAURANT') {
+      return res.status(400).send('Este pedido no lo reparte el restaurante: Uber lleva el seguimiento');
+    }
+    try {
+      await uber.restaurantDeliveryStatus(order.external.orderId, status);
+    } catch (err) {
+      logApiError(req, order, 'delivery', err);
+      return uberClosed(res, err);
+    }
+    const now = new Date();
+    const patch = { external: { ...order.external, deliveryStatus: status }, updatedAt: now };
+    if (status === 'delivered') patch.status = 'served';
+    return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al avisar la entrega');
+  }
+}
+
+// —— Estado de la tienda en Uber (en línea o pausada)
+async function uberStoreStatus(req, res) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(200).json({ linked: false });
+    const base = { linked: true, autoPause: link.autoPause !== false, pausedByCash: !!link.pausedByCash };
+    try {
+      const s = await uber.storeStatus(link.storeId);
+      return res.status(200).json({ ...base, status: s?.status || null, offlineReason: s?.offlineReason || null });
+    } catch (err) {
+      console.error('[uber]', err.message);
+      return res.status(200).json({ ...base, error: 'No se pudo consultar el estado a Uber Eats' });
+    }
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al leer el estado de la tienda');
+  }
+}
+
+// Pausar (con o sin hora para reanudarse sola) o reanudar la tienda a mano
+async function uberSetStoreStatus(req, res) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+    const status = req.body?.status;
+    if (!['ONLINE', 'PAUSED'].includes(status)) return res.status(400).send('Estado inválido');
+    const minutes = Number(req.body?.minutes);
+    const pausedUntil =
+      status === 'PAUSED' && Number.isFinite(minutes) && minutes >= 5 && minutes <= 1440 ? new Date(Date.now() + Math.round(minutes) * 60_000) : null;
+    try {
+      await uber.setStoreStatus(link.storeId, { status, pausedUntil, reason: status === 'PAUSED' ? 'Pausado desde MiRestaurante' : undefined });
+    } catch (err) {
+      console.error('[uber]', err.message);
+      return res.status(502).send('No se pudo cambiar el estado en Uber Eats. Intenta de nuevo.');
+    }
+    // Lo que se cambia a mano deja de ser «una pausa de la caja»: abrir la caja no lo reanudará por su cuenta
+    await db.SaveIntegration('uber', req.tenantId, { pausedByCash: false });
+    return res.status(200).json({ status, pausedUntil });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al cambiar el estado de la tienda');
+  }
+}
+
+async function uberSetAutoPause(req, res) {
+  try {
+    if (typeof req.body?.autoPause !== 'boolean') return res.status(400).send('Indica si se pausa sola (true o false)');
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+    await db.SaveIntegration('uber', req.tenantId, { autoPause: req.body.autoPause });
+    return res.status(200).json({ autoPause: req.body.autoPause });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al guardar el ajuste');
+  }
+}
+
+// —— Tasa de aceptación del negocio y revisión de pedidos perdidos
+const DAYS = [7, 30];
+async function uberMetrics(req, res) {
+  try {
+    const days = DAYS.includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+    const orders = await db.ListUberOrdersSince(req.tenantId, new Date(Date.now() - days * 24 * 3600 * 1000));
+    return res.status(200).json({ days, ...uber.acceptanceStats(orders) });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al calcular la tasa de aceptación');
+  }
+}
+
+async function uberReconcile(req, res) {
+  try {
+    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+    try {
+      return res.status(200).json(await uber.reconcileStore(link));
+    } catch (err) {
+      console.error('[uber]', err.message);
+      uber.recordEvent({ eventType: 'api.reconcile', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: err.message });
+      return res.status(502).send('No se pudo consultar a Uber Eats. Intenta de nuevo.');
+    }
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al buscar pedidos');
+  }
+}
+
+// —— Menú en Uber Eats: ver el estado y publicarlo (reemplaza el de la tienda)
+async function uberMenuStatus(req, res) {
+  try {
+    return res.status(200).json(await uberMenu.menuStatus(req.tenantId));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al leer el menú de Uber Eats');
+  }
+}
+
+async function uberPublishMenu(req, res) {
+  try {
+    return res.status(200).json(await uberMenu.publishMenu(req.tenantId, { open: req.body?.open, close: req.body?.close }));
+  } catch (err) {
+    if (err.status) return res.status(err.status).send(err.message);
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al publicar el menú');
+  }
+}
+
+module.exports = { uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder };

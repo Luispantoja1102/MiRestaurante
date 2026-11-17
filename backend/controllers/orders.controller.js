@@ -32,6 +32,15 @@ async function list(req, res) {
   }
 }
 
+async function awaiting(req, res) {
+  try {
+    return res.status(200).json(await db.GetAwaitingExternalOrders(req.tenantId));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al listar pedidos por responder');
+  }
+}
+
 async function getById(req, res) {
   try {
     const order = await db.GetOrderById(req.params.id, req.tenantId);
@@ -334,4 +343,4 @@ async function pay(req, res) {
   }
 }
 
-module.exports = { list, getById, create, updateStatus, pay, counterSale };
+module.exports = { list, awaiting, getById, create, updateStatus, pay, counterSale };

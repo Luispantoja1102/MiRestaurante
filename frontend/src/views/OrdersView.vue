@@ -34,6 +34,8 @@
         <p v-if="cashErr" class="err">{{ cashErr }}</p>
       </div>
 
+      <UberStoreStatus :refresh-key="cashOpen" />
+
       <div class="toolbar">
         <p>Cobro y seguimiento de pedidos del salón.</p>
         <router-link to="/menu" class="btn-primary">Nuevo pedido</router-link>
@@ -63,6 +65,12 @@
           </div>
           <div v-if="waiting(o)" class="awaiting" role="alert">
             <p><strong>{{ channelLabel[o.channel] || 'La plataforma' }} espera tu respuesta</strong> · {{ remaining(o) }}</p>
+            <p v-if="o.external?.allergy" class="allergy-alert"><strong>Atención:</strong> este pedido trae alergias. Revísalas abajo antes de aceptar; si no puedes cumplirlas, rechaza el pedido.</p>
+            <label class="prep">Listo en
+              <select v-model.number="prepMinutes">
+                <option v-for="m in PREP_OPTIONS" :key="m" :value="m">{{ m }} min</option>
+              </select>
+            </label>
             <div class="awaiting-actions">
               <button type="button" class="btn-primary" :disabled="!cashOpen || extBusy" :title="cashOpen ? '' : 'Abre la caja primero'" @click="acceptExternal(o)">Aceptar pedido</button>
               <button type="button" :disabled="extBusy" @click="askDeny(o)">Rechazar</button>
@@ -75,8 +83,10 @@
           <ul class="items">
             <li v-for="(item, i) in o.items || []" :key="i">
               {{ item.quantity }}× {{ item.name }} — {{ money(item.price * item.quantity) }}
+              <small v-if="item.notes" class="item-note" :class="{ allergy: isAllergyNote(item.notes) }">{{ item.notes }}</small>
             </li>
           </ul>
+          <p v-if="o.notes" class="order-note">{{ o.notes }}</p>
           <div class="foot">
             <strong>{{ money(o.total) }}</strong>
             <div class="actions">
@@ -94,11 +104,17 @@
                 @click="openPay(o)"
               >Cobrar</button>
               <button v-if="o.status === 'pending' && !waiting(o)" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
+              <template v-if="ownDelivery(o)">
+                <button v-if="!o.external.deliveryStatus" type="button" :disabled="extBusy" @click="deliveryStep(o, 'started')">Salió a entregar</button>
+                <button v-if="o.external.deliveryStatus === 'started'" type="button" :disabled="extBusy" @click="deliveryStep(o, 'arriving')">Va llegando</button>
+                <button type="button" class="btn-primary" :disabled="extBusy" @click="deliveryStep(o, 'delivered')">Entregado</button>
+              </template>
               <button
-                v-if="(o.modality === 'delivery' || (o.external && o.status === 'ready')) && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
+                v-else-if="(o.modality === 'delivery' || (o.external && o.status === 'ready')) && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
                 type="button"
                 @click="setStatus(o, 'served')"
               >Marcar entregado</button>
+              <button v-if="canCancelExternal(o)" type="button" :disabled="extBusy" @click="askCancel(o)">Cancelar pedido</button>
             </div>
           </div>
         </article>
@@ -110,15 +126,18 @@
       <Teleport to="body">
         <div v-if="denyTarget" class="modal-bg" @click.self="denyTarget = null">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="deny-title">
-            <h3 id="deny-title">Rechazar pedido</h3>
+            <h3 id="deny-title">{{ reasonMode === 'cancel' ? 'Cancelar pedido' : 'Rechazar pedido' }}</h3>
             <label>Motivo (se lo decimos a {{ channelLabel[denyTarget.channel] || 'la plataforma' }})
               <select v-model="denyCode">
-                <option v-for="r in DENY_REASONS" :key="r.code" :value="r.code">{{ r.label }}</option>
+                <option v-for="r in reasons" :key="r.code" :value="r.code">{{ r.label }}</option>
               </select>
+            </label>
+            <label v-if="denyCode === 'OTHER'">Detalle<span v-if="reasonMode === 'deny'"> (opcional)</span>
+              <input v-model.trim="reasonDetails" type="text" maxlength="150" :required="reasonMode === 'cancel'" />
             </label>
             <div class="modal-actions">
               <button type="button" @click="denyTarget = null">Volver</button>
-              <button type="button" class="btn-danger" :disabled="extBusy" @click="confirmDeny">Rechazar pedido</button>
+              <button type="button" class="btn-danger" :disabled="extBusy || (reasonMode === 'cancel' && denyCode === 'OTHER' && !reasonDetails)" @click="confirmDeny">{{ reasonMode === 'cancel' ? 'Cancelar pedido' : 'Rechazar pedido' }}</button>
             </div>
           </div>
         </div>
@@ -153,10 +172,12 @@ import { bindLive } from "../live";
 import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import TerminalNote from "../components/TerminalNote.vue";
+import UberStoreStatus from "../components/UberStoreStatus.vue";
 import { usePointTerminal } from "../point";
 import { apiService } from "../apiService";
 import {
   channelLabel,
+  isAllergyNote,
   isPlatformChannel,
   labelOf,
   modalityLabel,
@@ -172,14 +193,32 @@ const DENY_REASONS = [
   { code: "ITEM_AVAILABILITY", label: "Producto agotado" },
   { code: "CAPACITY", label: "Mucho trabajo, no alcanzamos" },
   { code: "STORE_CLOSED", label: "Estamos cerrados" },
+  { code: "SPECIAL_INSTRUCTIONS", label: "No podemos cumplir las indicaciones o alergias" },
   { code: "OTHER", label: "Otro motivo" },
 ];
+// Para cancelar un pedido que ya se aceptó (Uber exige uno de estos motivos)
+const CANCEL_REASONS = [
+  { code: "OUT_OF_ITEMS", label: "Se acabó un producto" },
+  { code: "RESTAURANT_TOO_BUSY", label: "Mucho trabajo, no alcanzamos" },
+  { code: "KITCHEN_CLOSED", label: "La cocina cerró" },
+  { code: "CANNOT_COMPLETE_CUSTOMER_NOTE", label: "No podemos cumplir la nota del cliente" },
+  { code: "OTHER", label: "Otro motivo" },
+];
+const PREP_OPTIONS = [10, 15, 20, 30, 45];
+const prepMinutes = ref(15);
 const now = ref(Date.now());
 const tick = setInterval(() => (now.value = Date.now()), 1000);
 const extBusy = ref(false);
 const extErr = ref("");
 const denyTarget = ref(null);
 const denyCode = ref("ITEM_AVAILABILITY");
+const reasonMode = ref("deny"); // deny: rechazar un pedido sin aceptar · cancel: cancelar uno ya aceptado
+const reasonDetails = ref("");
+const reasons = computed(() => (reasonMode.value === "cancel" ? CANCEL_REASONS : DENY_REASONS));
+const isDone = (o) => ["served", "cancelled"].includes(o.status);
+const canCancelExternal = (o) => o.external?.state === "accepted" && !isDone(o);
+// Lo reparte el propio restaurante: Uber pide avisar que salió, que va llegando y que entregó
+const ownDelivery = (o) => canCancelExternal(o) && o.external.type === "DELIVERY_BY_RESTAURANT";
 const waiting = (o) => o.external?.state === "awaiting";
 function remaining(o) {
   const left = new Date(o.external?.deadline).getTime() - now.value;
@@ -196,7 +235,7 @@ async function acceptExternal(o) {
   extBusy.value = true;
   extErr.value = "";
   try {
-    replaceOrder(await apiService.acceptExternalOrder(o.id));
+    replaceOrder(await apiService.acceptExternalOrder(o.id, prepMinutes.value));
     await loadCash();
   } catch (e) {
     extErr.value = e.response?.data || "No se pudo aceptar el pedido.";
@@ -206,19 +245,44 @@ async function acceptExternal(o) {
   }
 }
 function askDeny(o) {
+  reasonMode.value = "deny";
   denyCode.value = "ITEM_AVAILABILITY";
+  reasonDetails.value = "";
   denyTarget.value = o;
+}
+function askCancel(o) {
+  reasonMode.value = "cancel";
+  denyCode.value = "OUT_OF_ITEMS";
+  reasonDetails.value = "";
+  denyTarget.value = o;
+}
+async function deliveryStep(o, status) {
+  extBusy.value = true;
+  extErr.value = "";
+  try {
+    replaceOrder(await apiService.externalDeliveryStatus(o.id, status));
+  } catch (e) {
+    extErr.value = e.response?.data || "No se pudo avisar a la plataforma.";
+    await load();
+  } finally {
+    extBusy.value = false;
+  }
 }
 async function confirmDeny() {
   extBusy.value = true;
   extErr.value = "";
   try {
-    const label = DENY_REASONS.find((r) => r.code === denyCode.value)?.label || "";
-    replaceOrder(await apiService.denyExternalOrder(denyTarget.value.id, denyCode.value, label));
+    const cancel = reasonMode.value === "cancel";
+    const label = reasons.value.find((r) => r.code === denyCode.value)?.label || "";
+    replaceOrder(
+      cancel
+        ? await apiService.cancelExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value)
+        : await apiService.denyExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value || label)
+    );
     denyTarget.value = null;
   } catch (e) {
     denyTarget.value = null;
-    extErr.value = e.response?.data || "No se pudo rechazar el pedido.";
+    extErr.value = e.response?.data || (reasonMode.value === "cancel" ? "No se pudo cancelar el pedido." : "No se pudo rechazar el pedido.");
     await load();
   } finally {
     extBusy.value = false;
@@ -259,7 +323,8 @@ const filtered = computed(() => {
   }
   if (filter.value === "paid") return orders.value.filter((o) => o.paymentStatus === "paid");
   if (filter.value === "unpaid") return orders.value.filter((o) => o.paymentStatus !== "paid");
-  return orders.value.filter((o) => o.paymentStatus !== "paid" && o.status !== "cancelled");
+  // Un pedido de plataforma aceptado ya viene cobrado, pero sigue abierto hasta entregarlo o cancelarlo
+  return orders.value.filter((o) => (o.paymentStatus !== "paid" && o.status !== "cancelled") || canCancelExternal(o));
 });
 
 function money(n) {
@@ -448,6 +513,12 @@ onUnmounted(() => {
 .badge.st-ready { background: var(--mirestaurante-primary-soft); color: var(--mirestaurante-primary); }
 .badge.st-served { background: var(--mirestaurante-success-soft); color: var(--mirestaurante-success); }
 .badge.st-cancelled { background: var(--mirestaurante-danger-soft); color: var(--mirestaurante-danger); }
+.badge.refunded { background: var(--mirestaurante-danger-soft); color: var(--mirestaurante-danger); }
+.item-note { display: block; font-size: .82rem; color: var(--mirestaurante-muted); }
+.item-note.allergy { font-weight: 800; color: var(--mirestaurante-danger); }
+.order-note { margin: 0 0 .5rem; font-size: .85rem; font-style: italic; color: var(--mirestaurante-muted); }
+.allergy-alert { padding: .5rem .7rem; border-radius: .6rem; background: var(--mirestaurante-danger-soft); color: var(--mirestaurante-danger); }
+.prep { display: inline-flex; align-items: center; gap: .5rem; margin: 0 0 .5rem; font-size: .9rem; }
 .badge.paid { background: var(--mirestaurante-success-soft); color: var(--mirestaurante-success); }
 .badge.unpaid { background: var(--mirestaurante-warning-soft); color: var(--mirestaurante-warning); }
 .items { margin:.85rem 0; padding-left:1.1rem; color:var(--mirestaurante-muted); font-size:.9rem; }

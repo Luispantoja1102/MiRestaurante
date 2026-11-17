@@ -147,6 +147,9 @@
             <button type="button" class="link-btn" :disabled="uber.busy" @click="unlinkUber">Desvincular</button>
           </p>
 
+          <UberStoreStatus v-if="uber.storeId" show-auto />
+          <UberMenu v-if="uber.storeId" />
+          <UberMetrics v-if="uber.storeId" />
           <p v-if="uber.error" class="err" role="alert">{{ uber.error }}</p>
         </section>
 
@@ -220,6 +223,9 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import FocusPicker from "../components/FocusPicker.vue";
+import UberStoreStatus from "../components/UberStoreStatus.vue";
+import UberMetrics from "../components/UberMetrics.vue";
+import UberMenu from "../components/UberMenu.vue";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
 import { saveVenueSettings, venueStore } from "../venueStore";

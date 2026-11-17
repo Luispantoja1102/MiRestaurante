@@ -21,7 +21,11 @@ export const isPlatformChannel = (c) => ["uber", "rappi", "didi"].includes(c);
 export const paymentStatusLabel = {
   unpaid: "Sin pagar",
   paid: "Pagado",
+  refunded: "Devuelto",
 };
+
+// Las notas de un pedido de plataforma que empiezan con «ALERGIA» deben verse destacadas
+export const isAllergyNote = (notes) => /^ALERGIA/i.test(String(notes || ""));
 
 export const modalityLabel = {
   "dine-in": "En salón",

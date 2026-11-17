@@ -51,8 +51,10 @@
               <li v-for="(item, i) in o.items || []" :key="i">
                 <span class="qty">{{ item.quantity }}</span>
                 <span class="name">{{ item.name }}</span>
+                <span v-if="item.notes" class="item-note" :class="{ allergy: isAllergyNote(item.notes) }">{{ item.notes }}</span>
               </li>
             </ul>
+            <p v-if="o.notes" class="order-note">{{ o.notes }}</p>
 
             <div class="ticket-actions">
               <a
@@ -87,7 +89,7 @@ import { bindLive } from "../live";
 import { beep, resumeAudio } from "../sound";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
-import { channelLabel, labelOf, modalityLabel } from "../labels";
+import { channelLabel, isAllergyNote, labelOf, modalityLabel } from "../labels";
 
 const orders = ref([]);
 const loading = ref(false);
@@ -409,6 +411,9 @@ onUnmounted(() => {
   gap: 0.4rem;
   align-items: center;
 }
+.item-note { grid-column: 2; font-size: 0.85rem; color: var(--mirestaurante-muted); }
+.item-note.allergy { font-weight: 800; color: var(--mirestaurante-danger); background: var(--mirestaurante-danger-soft); padding: 0.25rem 0.5rem; border-radius: 0.45rem; }
+.order-note { margin: 0.4rem 0 0; font-size: 0.85rem; font-style: italic; color: var(--mirestaurante-muted); }
 .qty {
   display: inline-flex;
   align-items: center;
