@@ -211,6 +211,79 @@
           <p v-if="pt.error" class="err" role="alert">{{ pt.error }}</p>
         </section>
 
+        <!-- Impresora (se guarda solo en este dispositivo) -->
+        <template v-else-if="section === 'impresora'">
+          <section class="panel pr-card">
+            <h3>Cómo sale el ticket</h3>
+            <p class="hint">Se guarda solo en este dispositivo: cada caja elige su impresora. No necesita «Guardar cambios».</p>
+            <div class="pr-choices">
+              <button
+                v-for="m in PRINTER_MODES"
+                :key="m.id"
+                type="button"
+                class="pr-choice"
+                :aria-pressed="printerStore.mode === m.id"
+                :disabled="m.id !== 'browser' && !printerSupport()[m.id]"
+                @click="setPrinterMode(m.id)"
+              >
+                <strong>{{ m.label }}</strong>
+                <small>{{ m.id !== "browser" && !printerSupport()[m.id] ? "Este navegador no lo permite. Usa Chrome o Edge." : m.hint }}</small>
+              </button>
+            </div>
+          </section>
+
+          <section v-if="printerStore.mode !== 'browser'" class="panel pr-card">
+            <h3>Impresora térmica</h3>
+            <p class="pr-state" :class="printerStore.connected ? 'on' : printerStore.lost ? 'lost' : 'off'" role="status"><i></i>{{ printerLine }}</p>
+            <div class="pr-choices">
+              <button type="button" class="pr-choice" :aria-pressed="printerStore.paper === '80'" @click="savePrinterSettings({ paper: '80' })">
+                <strong>Papel 80 mm</strong><small>42 letras por renglón</small>
+              </button>
+              <button type="button" class="pr-choice" :aria-pressed="printerStore.paper === '58'" @click="savePrinterSettings({ paper: '58' })">
+                <strong>Papel 58 mm</strong><small>32 letras por renglón</small>
+              </button>
+            </div>
+            <label v-if="printerStore.mode === 'serial'" class="field">
+              <span>Velocidad del puerto</span>
+              <select :value="printerStore.baudRate" @change="savePrinterSettings({ baudRate: Number($event.target.value) })">
+                <option v-for="b in [9600, 19200, 38400, 57600, 115200]" :key="b" :value="b">{{ b }}</option>
+              </select>
+            </label>
+            <div class="pr-acts">
+              <button type="button" class="btn-primary" :disabled="printerStore.busy" @click="choosePrinter">{{ printerStore.deviceName ? "Cambiar impresora" : "Elegir impresora" }}</button>
+              <button type="button" class="pr-btn" :disabled="printerStore.busy || !printerStore.connected" @click="testPrint">{{ printerStore.busy ? "Imprimiendo…" : "Imprimir prueba" }}</button>
+              <button type="button" class="pr-btn" :disabled="printerStore.busy || !printerStore.connected" @click="pulseDrawer">Abrir cajón</button>
+            </div>
+            <p v-if="printerErr" class="err" role="alert">{{ printerErr }}</p>
+          </section>
+
+          <section v-if="printerStore.mode !== 'browser'" class="panel pr-card">
+            <h3>Diseño de la cuenta</h3>
+            <div class="pr-choices">
+              <button type="button" class="pr-choice" :aria-pressed="printerStore.ticketStyle === 'image'" @click="savePrinterSettings({ ticketStyle: 'image' })">
+                <strong>Con diseño de restaurante</strong><small>Logo, mesa y total enmarcados, sello de pagado.</small>
+              </button>
+              <button type="button" class="pr-choice" :aria-pressed="printerStore.ticketStyle === 'text'" @click="savePrinterSettings({ ticketStyle: 'text' })">
+                <strong>Texto sencillo</strong><small>Sale más rápido en impresoras lentas.</small>
+              </button>
+            </div>
+            <div class="pr-switch-row">
+              <div>
+                <h3>Imprimir el ticket al cobrar</h3>
+                <p class="hint">Al terminar de cobrar sale la cuenta sola. Si lo apagas, te pregunta cada vez.</p>
+              </div>
+              <button type="button" role="switch" class="pr-switch" :aria-checked="printerStore.autoPrint" aria-label="Imprimir el ticket al cobrar" @click="savePrinterSettings({ autoPrint: !printerStore.autoPrint })"></button>
+            </div>
+            <div class="pr-switch-row">
+              <div>
+                <h3>Abrir el cajón al cobrar en efectivo</h3>
+                <p class="hint">Manda el pulso al cajón conectado a la impresora (conector RJ11).</p>
+              </div>
+              <button type="button" role="switch" class="pr-switch" :aria-checked="printerStore.drawer" aria-label="Abrir el cajón al cobrar en efectivo" @click="savePrinterSettings({ drawer: !printerStore.drawer })"></button>
+            </div>
+          </section>
+        </template>
+
         <!-- Apariencia -->
         <section v-else-if="section === 'apariencia'" class="panel">
           <p class="hint">Los colores de tu negocio salen de tu logo (en «Datos y logo»). Aquí eliges si la app se ve en claro u oscuro.</p>
@@ -260,6 +333,7 @@ import LogoPicker from "../components/LogoPicker.vue";
 import { themeStore, applyUiTheme } from "../themeStore";
 import { inviteStatusLabel, labelOf, roleLabel } from "../labels";
 import { ROLE_DEFS, focusFor, focusInfo } from "../roles";
+import { connectPrinter, openCashDrawer, printTestPage, printerStore, printerSupport, savePrinterSettings } from "../thermalPrinter";
 
 const router = useRouter();
 const route = useRoute();
@@ -301,7 +375,7 @@ const NAV = [
     title: "Esta aplicación",
     items: [
       { id: "apariencia", icon: "sun", label: "Apariencia", desc: "Tema claro u oscuro", lead: "Cómo se ve la app en este dispositivo." },
-      { to: "/printer", id: "printer", icon: "printer", label: "Impresora", desc: "Térmica USB o Bluetooth de este dispositivo" },
+      { id: "impresora", icon: "printer", label: "Impresora", desc: "Térmica USB o Bluetooth de este dispositivo", lead: "Cómo imprime este dispositivo las cuentas, comandas y cortes." },
     ],
   },
   {
@@ -471,6 +545,41 @@ async function unlinkUber() {
   }
 }
 
+// ——— Impresora de este dispositivo ———
+const PRINTER_MODES = [
+  { id: "browser", label: "Navegador (actual)", hint: "Abre el ticket y el diálogo de imprimir del navegador. Sirve con cualquier impresora." },
+  { id: "usb", label: "Térmica USB", hint: "Sale directo, sin diálogo. En Windows solo abre si la impresora no tiene su propio driver; si no abre, usa «puerto COM». Chrome en PC o Android (con cable OTG)." },
+  { id: "serial", label: "Térmica USB (puerto COM)", hint: "Para impresoras que Windows muestra como puerto COM: es lo que mejor funciona en Windows. Chrome o Edge en PC." },
+  { id: "bluetooth", label: "Térmica Bluetooth", hint: "Sale directo, sin diálogo. Chrome en Android o en computadora con Bluetooth." },
+];
+const printerErr = ref("");
+const printerLine = computed(() => {
+  const name = printerStore.deviceName;
+  if (printerStore.connected) return `Conectada: ${name}`;
+  if (printerStore.lost) return "Sin conexión con la impresora. Se reintenta sola.";
+  if (!name) return "Sin impresora elegida";
+  if (printerStore.trying) return `Elegida: ${name} (conectando…)`;
+  if (printerStore.error) return `Elegida: ${name}. No se pudo conectar: ${printerStore.error}`;
+  return `Elegida: ${name} (se conecta al imprimir)`;
+});
+function setPrinterMode(mode) {
+  printerErr.value = "";
+  savePrinterSettings({ mode, deviceName: mode === printerStore.mode ? printerStore.deviceName : "" });
+}
+async function printerJob(job, ok) {
+  printerErr.value = "";
+  try {
+    await job();
+    message.value = ok;
+    messageIsError.value = false;
+  } catch (e) {
+    printerErr.value = e?.message || "La impresora no respondió.";
+  }
+}
+const choosePrinter = () => printerJob(() => connectPrinter({ prompt: true }), "Impresora lista.");
+const testPrint = () => printerJob(() => printTestPage(), "Prueba enviada a la impresora.");
+const pulseDrawer = () => printerJob(() => openCashDrawer(), "Se mandó el pulso al cajón.");
+
 // ——— Terminal de cobro (Mercado Pago Point) ———
 // terminals = las registradas con su nombre interno; account = las que Mercado Pago tiene en la cuenta
 const pt = reactive({ loaded: false, available: false, connected: false, ok: false, terminalLabel: "", message: "", terminals: [], account: [], names: {}, pick: "", newName: "", busy: false, error: "" });
@@ -593,6 +702,10 @@ function logout() {
 onMounted(async () => {
   loadInvites();
   loadUber();
+  if (route.query.s === "impresora") {
+    open("impresora");
+    router.replace({ query: {} });
+  }
   await loadPoint();
   // Al volver de Mercado Pago se abre esta sección y se dice cómo salió
   if (route.query.s === "terminal") {
@@ -679,6 +792,27 @@ input, select { border: 1px solid var(--mirestaurante-line); border-radius: 0.65
 .ok { color: var(--mirestaurante-success); font-size: 0.88rem; margin: 0; }
 .err { color: var(--mirestaurante-danger); font-size: 0.88rem; margin: 0; }
 .pass-form { display: grid; gap: 0.7rem; max-width: 24rem; }
+.pr-card { display: grid; gap: 0.85rem; }
+.pr-card h3 { margin: 0; font-size: 1.02rem; font-weight: 800; }
+.pr-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0.6rem; }
+.pr-choice { display: grid; gap: 0.2rem; align-content: start; text-align: left; padding: 0.75rem 0.85rem; border-radius: 0.9rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-surface); color: var(--mirestaurante-ink); font: inherit; cursor: pointer; }
+.pr-choice small { color: var(--mirestaurante-muted); font-size: 0.8rem; line-height: 1.3; }
+.pr-choice[aria-pressed="true"] { border-color: var(--mirestaurante-primary); background: var(--mirestaurante-primary-soft); }
+.pr-choice:disabled { opacity: 0.55; cursor: default; }
+.pr-state { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 0.88rem; font-weight: 700; color: var(--mirestaurante-muted); }
+.pr-state i { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--mirestaurante-muted); flex: none; }
+.pr-state.on { color: var(--mirestaurante-success); }
+.pr-state.on i { background: var(--mirestaurante-success); }
+.pr-state.lost i { background: var(--mirestaurante-warning); }
+.pr-acts { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.pr-btn { min-height: 2.5rem; padding: 0 1rem; border-radius: 0.7rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-surface); color: var(--mirestaurante-ink); font: inherit; font-weight: 700; cursor: pointer; }
+.pr-btn:disabled { opacity: 0.55; cursor: default; }
+.pr-switch-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.pr-switch-row h3 { margin-bottom: 0.2rem; }
+.pr-switch { position: relative; flex: none; width: 3rem; height: 1.75rem; border-radius: 999px; border: none; background: var(--mirestaurante-line); cursor: pointer; transition: background 0.15s; }
+.pr-switch::after { content: ""; position: absolute; top: 0.2rem; left: 0.2rem; width: 1.35rem; height: 1.35rem; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.pr-switch[aria-checked="true"] { background: var(--mirestaurante-primary); }
+.pr-switch[aria-checked="true"]::after { transform: translateX(1.25rem); }
 .term-list { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.8rem; }
 .term-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem; }
 .term-row label { display: grid; gap: 0.25rem; flex: 1 1 12rem; }

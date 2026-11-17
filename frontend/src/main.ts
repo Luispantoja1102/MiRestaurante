@@ -35,7 +35,6 @@ import InviteAcceptView from "./views/InviteAcceptView.vue";
 import ForgotPasswordView from "./views/ForgotPasswordView.vue";
 import ResetPasswordView from "./views/ResetPasswordView.vue";
 import PrintOrderView from "./views/PrintOrderView.vue";
-import PrinterView from "./views/PrinterView.vue";
 import PrintCashCloseView from "./views/PrintCashCloseView.vue";
 import BillingView from "./views/BillingView.vue";
 import PlatformAdminView from "./views/PlatformAdminView.vue";
@@ -96,7 +95,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: "/printer",
     name: "printer",
-    component: PrinterView,
+    redirect: { path: "/settings", query: { s: "impresora" } }, // la impresora se configura en Ajustes
     meta: { requiresAuth: true, roles: screenRoles("printer") },
   },
   {

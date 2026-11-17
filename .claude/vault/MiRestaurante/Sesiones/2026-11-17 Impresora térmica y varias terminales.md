@@ -1,7 +1,7 @@
 # 2026-11-17 Impresora térmica y varias terminales
 
 ## Qué se hizo
-- **Impresora térmica directa** (como MiTiendita): cada dispositivo imprime por USB, COM o Bluetooth en ESC/POS (PC850). Cuenta, comanda de cocina y corte de caja. Pantalla `/printer` (Ajustes → Impresora).
+- **Impresora térmica directa** (como MiTiendita): cada dispositivo imprime por USB, COM o Bluetooth en ESC/POS (PC850). Cuenta, comanda de cocina y corte de caja. Menú en Ajustes → Impresora (sección de `SettingsView.vue` con tarjetas de modo y papel e interruptores, como MiTiendita); `/printer` solo redirige ahí y `PrinterView.vue` se eliminó.
   - `frontend/src/escpos.js` (codificador y tickets), `ticketData.js` (datos del pedido), `thermalPrinter.js` (conexión, clave `mirestaurante_printer`), `printing.js` (`printOrder`, `printCashClose`, con respaldo al navegador).
   - Enganchado en Mostrador, Pedidos/Caja y Cocina. Pruebas: `backend/tests/escpos.test.js`.
 - **Varias terminales Mercado Pago** con nombre interno.
