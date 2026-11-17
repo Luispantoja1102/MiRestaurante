@@ -179,18 +179,33 @@
                 Cuenta de Mercado Pago conectada.
                 <button type="button" class="link-btn" :disabled="pt.busy" @click="disconnectPoint">Desconectar</button>
               </p>
-              <form class="pass-form" @submit.prevent="pickTerminal">
-                <label>Tu terminal
+              <ul v-if="pt.terminals.length" class="term-list">
+                <li v-for="t in pt.terminals" :key="t.id">
+                  <form class="term-row" @submit.prevent="renameTerminal(t)">
+                    <label>Nombre interno <small>({{ t.label }})</small>
+                      <input v-model="pt.names[t.id]" maxlength="40" required />
+                    </label>
+                    <button type="submit" class="btn-primary" :disabled="pt.busy || !pt.names[t.id]?.trim() || pt.names[t.id].trim() === t.name">Guardar</button>
+                    <button type="button" class="link-btn" :disabled="pt.busy" @click="removeTerminal(t)">Quitar</button>
+                  </form>
+                  <p v-if="t.ok" class="ok" role="status">{{ t.name }}: lista</p>
+                  <p v-else class="err" role="alert">{{ t.name }}: {{ t.message }}</p>
+                </li>
+              </ul>
+              <form v-if="freeTerminals.length" class="pass-form" @submit.prevent="pickTerminal">
+                <label>{{ pt.terminals.length ? "Agregar otra terminal" : "Tu terminal" }}
                   <select v-model="pt.pick" required>
                     <option value="" disabled>Elige tu terminal</option>
-                    <option v-for="t in pt.terminals" :key="t.id" :value="t.id">{{ t.external_pos_id || t.id }}</option>
+                    <option v-for="t in freeTerminals" :key="t.id" :value="t.id">{{ t.external_pos_id || t.id }}</option>
                   </select>
                 </label>
-                <button type="submit" class="btn-primary" :disabled="pt.busy || !pt.pick">{{ pt.terminalLabel ? "Cambiar terminal" : "Usar esta terminal" }}</button>
+                <label>Nombre interno (opcional)
+                  <input v-model="pt.newName" maxlength="40" placeholder="Barra, Terraza, Caja 2…" />
+                </label>
+                <button type="submit" class="btn-primary" :disabled="pt.busy || !pt.pick">Usar esta terminal</button>
               </form>
-              <p v-if="!pt.terminals.length" class="hint">No encontramos terminales en tu cuenta. Vincúlala primero desde la app de Mercado Pago.</p>
-              <p v-if="pt.ok" class="ok" role="status">Terminal lista: {{ pt.terminalLabel }}</p>
-              <p v-else-if="pt.terminalLabel" class="err" role="alert">{{ pt.message }}</p>
+              <p v-else-if="!pt.account.length" class="hint">No encontramos terminales en tu cuenta. Vincúlala primero desde la app de Mercado Pago.</p>
+              <p v-if="pt.terminals.length > 1" class="hint">Al cobrar, Caja y el mostrador te dejan elegir en cuál terminal se cobra.</p>
             </template>
           </template>
           <p v-if="pt.error" class="err" role="alert">{{ pt.error }}</p>
@@ -258,6 +273,7 @@ const ICONS = {
   users: svg('<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0112 0M16 5a3 3 0 010 6M21 20a6 6 0 00-4-5.6"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>'),
   plug: svg('<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>'),
+  printer: svg('<path d="M7 9V4h10v5"/><path d="M7 17H5a1 1 0 01-1-1v-5a2 2 0 012-2h12a2 2 0 012 2v5a1 1 0 01-1 1h-2"/><path d="M7 14h10v6H7z"/>'),
   card: svg('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h3"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>'),
   chat: svg('<path d="M4 5h16v11H9l-5 4V5z"/>'),
@@ -283,7 +299,10 @@ const NAV = [
   },
   {
     title: "Esta aplicación",
-    items: [{ id: "apariencia", icon: "sun", label: "Apariencia", desc: "Tema claro u oscuro", lead: "Cómo se ve la app en este dispositivo." }],
+    items: [
+      { id: "apariencia", icon: "sun", label: "Apariencia", desc: "Tema claro u oscuro", lead: "Cómo se ve la app en este dispositivo." },
+      { to: "/printer", id: "printer", icon: "printer", label: "Impresora", desc: "Térmica USB o Bluetooth de este dispositivo" },
+    ],
   },
   {
     title: "Mi cuenta",
@@ -453,7 +472,9 @@ async function unlinkUber() {
 }
 
 // ——— Terminal de cobro (Mercado Pago Point) ———
-const pt = reactive({ loaded: false, available: false, connected: false, ok: false, terminalLabel: "", message: "", terminals: [], pick: "", busy: false, error: "" });
+// terminals = las registradas con su nombre interno; account = las que Mercado Pago tiene en la cuenta
+const pt = reactive({ loaded: false, available: false, connected: false, ok: false, terminalLabel: "", message: "", terminals: [], account: [], names: {}, pick: "", newName: "", busy: false, error: "" });
+const freeTerminals = computed(() => pt.account.filter((a) => !pt.terminals.some((t) => t.id === a.id)));
 const MP_RETURN = {
   cancelled: "Cancelaste la conexión con Mercado Pago.",
   state: "El enlace de conexión caducó. Vuelve a intentarlo.",
@@ -462,7 +483,8 @@ const MP_RETURN = {
 async function loadPoint() {
   try {
     Object.assign(pt, await apiService.pointStatus(), { loaded: true });
-    pt.terminals = pt.connected ? await apiService.pointTerminals().catch(() => []) : [];
+    pt.names = Object.fromEntries(pt.terminals.map((t) => [t.id, t.name]));
+    pt.account = pt.connected ? await apiService.pointTerminals().catch(() => []) : [];
   } catch {
     pt.loaded = false;
   }
@@ -483,12 +505,41 @@ async function pickTerminal() {
   pt.busy = true;
   pt.error = "";
   try {
-    await apiService.pointRegisterTerminal(pt.pick);
+    await apiService.pointRegisterTerminal(pt.pick, pt.newName);
+    pt.pick = "";
+    pt.newName = "";
     await loadPoint();
     message.value = "Terminal lista para cobrar.";
     messageIsError.value = false;
   } catch (e) {
     pt.error = e.response?.data?.message || "No se pudo usar esa terminal.";
+  } finally {
+    pt.busy = false;
+  }
+}
+
+async function renameTerminal(t) {
+  pt.busy = true;
+  pt.error = "";
+  try {
+    await apiService.pointRenameTerminal(t.id, pt.names[t.id]);
+    await loadPoint();
+  } catch (e) {
+    pt.error = e.response?.data?.message || "No se pudo cambiar el nombre.";
+  } finally {
+    pt.busy = false;
+  }
+}
+
+async function removeTerminal(t) {
+  if (!confirm(`¿Quitar la terminal «${t.name}»? Dejará de recibir cobros desde la plataforma.`)) return;
+  pt.busy = true;
+  pt.error = "";
+  try {
+    await apiService.pointRemoveTerminal(t.id);
+    await loadPoint();
+  } catch (e) {
+    pt.error = e.response?.data?.message || "No se pudo quitar la terminal.";
   } finally {
     pt.busy = false;
   }
@@ -628,6 +679,9 @@ input, select { border: 1px solid var(--mirestaurante-line); border-radius: 0.65
 .ok { color: var(--mirestaurante-success); font-size: 0.88rem; margin: 0; }
 .err { color: var(--mirestaurante-danger); font-size: 0.88rem; margin: 0; }
 .pass-form { display: grid; gap: 0.7rem; max-width: 24rem; }
+.term-list { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.8rem; }
+.term-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem; }
+.term-row label { display: grid; gap: 0.25rem; flex: 1 1 12rem; }
 .invite-form { display: grid; grid-template-columns: 1.4fr .8fr auto; gap: .65rem; align-items: end; }
 .invite-list { list-style: none; margin: 0; padding: 0; }
 .invite-list li { display: flex; justify-content: space-between; gap: 1rem; padding: .75rem 0; border-bottom: 1px solid var(--mirestaurante-line); }

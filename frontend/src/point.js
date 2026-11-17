@@ -2,19 +2,26 @@
 import { reactive, ref } from "vue";
 import { apiService } from "./apiService";
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const PICK_KEY = "mirestaurante_point_terminal";
+const sleep =(ms) => new Promise((r) => setTimeout(r, ms));
 const apiMessage = (e) => e.response?.data?.message || "";
 
 export function usePointTerminal() {
   // ok = hay terminal lista para cobrar; connected = ya conectó su cuenta (aunque la terminal falle hoy)
-  const term = reactive({ loaded: false, ok: false, connected: false, code: "", message: "", terminalLabel: "" });
+  // terminals = las registradas (con nombre interno); selected = en cuál se cobra cuando hay varias
+  const term = reactive({ loaded: false, ok: false, connected: false, code: "", message: "", terminalLabel: "", terminals: [], selected: "" });
   const waiting = ref(false);
   let cancelling = false;
   let chargeId = null;
 
   async function load() {
     try {
-      Object.assign(term, { ok: false, connected: false, code: "", message: "" }, await apiService.pointStatus(), { loaded: true });
+      Object.assign(term, { ok: false, connected: false, code: "", message: "", terminals: [] }, await apiService.pointStatus(), { loaded: true });
+      // Se recuerda la última terminal de este dispositivo; si ya no sirve, la primera lista
+      const ready = term.terminals.filter((t) => t.ok);
+      let saved = "";
+      try { saved = localStorage.getItem(PICK_KEY) || ""; } catch { /* sin almacenamiento */ }
+      term.selected = [term.selected, saved].find((id) => id && ready.some((t) => t.id === id)) || ready[0]?.id || "";
     } catch {
       Object.assign(term, { loaded: true, ok: false, connected: false });
     }
@@ -25,7 +32,8 @@ export function usePointTerminal() {
     waiting.value = true;
     cancelling = false;
     try {
-      const c = await apiService.pointStartCharge(String(saleId), amount);
+      try { localStorage.setItem(PICK_KEY, term.selected); } catch { /* sin almacenamiento */ }
+      const c = await apiService.pointStartCharge(String(saleId), amount, term.selected || undefined);
       chargeId = c.id;
       let status = c.status;
       while (status === "pending") {

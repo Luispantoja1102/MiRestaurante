@@ -316,11 +316,17 @@ export const apiService = {
   pointTerminals() {
     return axios.get('/point/terminals').then((r) => r.data as { id: string; external_pos_id?: string }[]);
   },
-  pointRegisterTerminal(terminalId: string) {
-    return axios.post('/point/terminal', { terminalId }).then((r) => r.data);
+  pointRegisterTerminal(terminalId: string, name?: string) {
+    return axios.post('/point/terminal', { terminalId, name }).then((r) => r.data);
   },
-  pointStartCharge(clientSaleId: string, amount: number) {
-    return axios.post('/point/charges', { clientSaleId, amount }).then((r) => r.data);
+  pointRenameTerminal(terminalId: string, name: string) {
+    return axios.put(`/point/terminals/${encodeURIComponent(terminalId)}`, { name }).then((r) => r.data);
+  },
+  pointRemoveTerminal(terminalId: string) {
+    return axios.delete(`/point/terminals/${encodeURIComponent(terminalId)}`);
+  },
+  pointStartCharge(clientSaleId: string, amount: number, terminalId?: string) {
+    return axios.post('/point/charges', { clientSaleId, amount, terminalId }).then((r) => r.data);
   },
   pointCharge(id: string) {
     return axios.get(`/point/charges/${id}`).then((r) => r.data);

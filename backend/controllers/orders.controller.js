@@ -215,7 +215,8 @@ async function counterSale(req, res) {
     if (chargeId) {
       if (method !== 'card') return res.status(400).send('El cobro con terminal es solo para tarjeta');
       try {
-        await point.consumeCharge(req.tenantId, chargeId, { saleId: clientRef || `charge-${chargeId}`, total: payload.total });
+        const used = await point.consumeCharge(req.tenantId, chargeId, { saleId: clientRef || `charge-${chargeId}`, total: payload.total });
+        payload.pointTerminal = used.terminalName || null; // en cuál terminal se cobró
       } catch (e) {
         return res.status(e.status || 500).send(e.message);
       }
@@ -295,10 +296,11 @@ async function pay(req, res) {
     }
 
     const chargeId = req.body?.pointChargeId ? String(req.body.pointChargeId) : null;
+    let pointTerminal = null;
     if (chargeId) {
       if (method !== 'card') return res.status(400).send('El cobro con terminal es solo para tarjeta');
       try {
-        await point.consumeCharge(req.tenantId, chargeId, { saleId: existing.id, total: existing.total });
+        pointTerminal = (await point.consumeCharge(req.tenantId, chargeId, { saleId: existing.id, total: existing.total })).terminalName || null;
       } catch (e) {
         return res.status(e.status || 500).send(e.message);
       }
@@ -311,7 +313,7 @@ async function pay(req, res) {
         {
           paymentStatus: 'paid',
           paymentMethod: method,
-          ...(chargeId ? { pointChargeId: chargeId } : {}),
+          ...(chargeId ? { pointChargeId: chargeId, pointTerminal } : {}),
           status: existing.status === 'cancelled' ? existing.status : 'served',
           paidAt: new Date(),
           updatedAt: new Date(),

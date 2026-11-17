@@ -162,6 +162,8 @@ export const SCREENS = [
   { name: "setup", path: "/setup", label: "Configuración inicial", roles: ["admin"], modes: BOTH },
   { name: "printOrder", path: "/print/order/:id", label: "Cuenta", roles: ["admin", "cashier", "waiter", "kitchen"], modes: BOTH },
   { name: "printCash", path: "/print/cash/:id", label: "Cierre de caja", roles: ["admin", "cashier"], modes: BOTH },
+  // La impresora térmica se configura en cada dispositivo, así que también la ven quienes imprimen (caja, meseros, cocina)
+  { name: "printer", path: "/printer", label: "Impresora", roles: ["admin", "cashier", "waiter", "kitchen"], modes: BOTH },
   { name: "platform", path: "/platform", label: "Plataforma", roles: PLATFORM_ROLE_IDS, modes: BOTH },
   { name: "partner", path: "/partner", label: "Portal de socios", roles: PARTNER_ROLE_IDS, modes: BOTH },
 ];

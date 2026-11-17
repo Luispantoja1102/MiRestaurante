@@ -121,48 +121,106 @@ async function listTerminals(tenantId) {
 const setPdvMode = (tenantId, terminalId) =>
   mp(tenantId, '/terminals/v1/setup', { method: 'PATCH', body: { terminals: [{ id: terminalId, operating_mode: 'PDV' }] } });
 
-async function registerTerminal(tenantId, terminalId) {
+const MAX_TERMINALS = 10;
+// Nombre interno que el negocio le pone a cada terminal para distinguirlas (p. ej. «Barra», «Terraza»)
+const cleanName = (n) => String(n ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+const sameName = (list, name, exceptId) => list.some((t) => t.id !== exceptId && String(t.name).toLowerCase() === name.toLowerCase());
+const publicTerminal = (t) => ({ id: t.id, name: t.name, label: t.label, ok: t.ok, code: t.code, message: t.message });
+
+/** Terminales registradas del negocio. Las conexiones de antes (una sola terminal) se leen como una lista de una. */
+function terminalsOf(p) {
+  if (Array.isArray(p?.terminals)) return p.terminals;
+  return p?.terminalId ? [{ id: p.terminalId, label: p.terminalLabel || p.terminalId, name: p.terminalLabel || p.terminalId }] : [];
+}
+
+const saveTerminals = (tenantId, list, extra = {}) => db.SavePointConnection(tenantId, { terminals: list, terminalId: null, terminalLabel: null, ...extra });
+
+/** Registra una terminal de la cuenta (o actualiza su nombre si ya estaba). Se pueden tener varias a la vez. */
+async function registerTerminal(tenantId, terminalId, name) {
   const t = (await listTerminals(tenantId)).find((x) => x.id === terminalId);
   if (!t) throw httpError('Esa terminal no pertenece a tu cuenta de Mercado Pago', 404, 'terminal_not_found');
+  const list = terminalsOf(await db.GetPointConnection(tenantId)).map((x) => ({ ...x }));
+  const label = t.external_pos_id || t.id;
+  const existing = list.find((x) => x.id === terminalId);
+  if (!existing && list.length >= MAX_TERMINALS) throw httpError(`Puedes registrar hasta ${MAX_TERMINALS} terminales`, 400);
+  const chosen = cleanName(name) || existing?.name || label;
+  if (sameName(list, chosen, terminalId)) throw httpError('Ya tienes una terminal con ese nombre', 409, 'name_taken');
   await setPdvMode(tenantId, terminalId); // la terminal recibe cobros desde el sistema
-  await db.SavePointConnection(tenantId, {
-    terminalId,
-    terminalLabel: t.external_pos_id || t.id,
-    registeredAt: new Date(),
-    status: 'ready',
-    lastError: null,
-  });
-  return { terminalId };
+  if (existing) Object.assign(existing, { label, name: chosen });
+  else list.push({ id: terminalId, label, name: chosen, addedAt: new Date() });
+  await saveTerminals(tenantId, list, { status: 'ready', lastError: null });
+  return { terminalId, name: chosen };
 }
 
-/** ¿Se puede cobrar AHORA? Devuelve { ok, code, message }. */
-async function preflight(tenantId) {
+async function renameTerminal(tenantId, terminalId, name) {
+  const list = terminalsOf(await db.GetPointConnection(tenantId)).map((x) => ({ ...x }));
+  const t = list.find((x) => x.id === terminalId);
+  if (!t) throw httpError('Esa terminal no está registrada', 404, 'terminal_not_found');
+  const chosen = cleanName(name);
+  if (!chosen) throw httpError('Escribe un nombre para la terminal', 400);
+  if (sameName(list, chosen, terminalId)) throw httpError('Ya tienes una terminal con ese nombre', 409, 'name_taken');
+  t.name = chosen;
+  await saveTerminals(tenantId, list);
+  return { terminalId, name: chosen };
+}
+
+async function removeTerminal(tenantId, terminalId) {
+  const list = terminalsOf(await db.GetPointConnection(tenantId));
+  if (!list.some((x) => x.id === terminalId)) throw httpError('Esa terminal no está registrada', 404, 'terminal_not_found');
+  await saveTerminals(tenantId, list.filter((x) => x.id !== terminalId));
+}
+
+/** ¿Cuáles de estas terminales pueden cobrar AHORA? Una sola consulta a Mercado Pago para todas. */
+async function checkTerminals(tenantId, terminals) {
+  let found;
+  try {
+    found = new Map((await listTerminals(tenantId)).map((t) => [t.id, t]));
+  } catch (err) {
+    return terminals.map((t) => ({ ...t, ok: false, code: err.code || 'check_failed', message: err.message }));
+  }
+  const out = [];
+  for (const t of terminals) {
+    const mine = found.get(t.id);
+    if (!mine) {
+      out.push({ ...t, ok: false, code: 'terminal_missing', message: `La terminal «${t.name}» ya no aparece vinculada a tu cuenta. Vuelve a elegirla.` });
+      continue;
+    }
+    try {
+      if (mine.operating_mode && mine.operating_mode !== 'PDV') await setPdvMode(tenantId, t.id);
+      out.push({ ...t, ok: true, code: 'ready', message: 'Terminal lista' });
+    } catch (err) {
+      out.push({ ...t, ok: false, code: err.code || 'check_failed', message: err.message });
+    }
+  }
+  return out;
+}
+
+/** ¿Se puede cobrar AHORA en esa terminal (o en la primera, si no se indica)? Devuelve { ok, code, message }. */
+async function preflight(tenantId, terminalId) {
   const p = await db.GetPointConnection(tenantId);
   if (!p?.accessToken) return { ok: false, code: 'not_connected', message: 'Conecta tu cuenta de Mercado Pago para cobrar con terminal.' };
-  if (!p.terminalId) return { ok: false, code: 'no_terminal', message: 'Elige tu terminal de Mercado Pago para cobrar con tarjeta.' };
-  try {
-    const t = (await listTerminals(tenantId)).find((x) => x.id === p.terminalId);
-    if (!t) {
-      await db.SavePointConnection(tenantId, { status: 'disconnected', lastError: 'terminal_missing' });
-      return { ok: false, code: 'terminal_missing', message: 'Tu terminal ya no aparece vinculada a tu cuenta. Vuelve a elegirla.' };
-    }
-    if (t.operating_mode && t.operating_mode !== 'PDV') await setPdvMode(tenantId, p.terminalId);
-    await db.SavePointConnection(tenantId, { status: 'ready', lastCheckAt: new Date(), lastError: null });
-    return { ok: true, code: 'ready', message: 'Terminal lista' };
-  } catch (err) {
-    return { ok: false, code: err.code || 'check_failed', message: err.message };
-  }
+  const list = terminalsOf(p);
+  if (!list.length) return { ok: false, code: 'no_terminal', message: 'Elige tu terminal de Mercado Pago para cobrar con tarjeta.' };
+  const t = terminalId ? list.find((x) => x.id === terminalId) : list[0];
+  if (!t) return { ok: false, code: 'terminal_not_registered', message: 'Esa terminal no está registrada.' };
+  const [r] = await checkTerminals(tenantId, [t]);
+  if (r.ok) await db.SavePointConnection(tenantId, { status: 'ready', lastCheckAt: new Date(), lastError: null });
+  else if (r.code === 'terminal_missing') await db.SavePointConnection(tenantId, { status: 'disconnected', lastError: 'terminal_missing' });
+  return { ok: r.ok, code: r.code, message: r.message };
 }
 
-/** Estado para Ajustes y para el cobro. Nunca devuelve tokens. */
+/** Estado para Ajustes y para el cobro: cada terminal con su nombre y si está lista. Nunca devuelve tokens. */
 async function status(tenantId) {
   const p = await db.GetPointConnection(tenantId);
-  const base = { available: isConfigured(), connected: Boolean(p?.accessToken), terminalLabel: p?.terminalLabel || '' };
+  const list = terminalsOf(p);
+  const base = { available: isConfigured(), connected: Boolean(p?.accessToken), terminalLabel: list[0]?.name || '', terminals: list.map(publicTerminal) };
   if (!base.available) return { ...base, ok: false, code: 'not_configured', message: 'La conexión con Mercado Pago no está configurada en el servidor.' };
-  if (!p?.terminalId) {
+  if (!list.length) {
     return { ...base, ok: false, code: p?.accessToken ? 'no_terminal' : 'not_connected', message: p?.accessToken ? 'Elige tu terminal para cobrar con tarjeta.' : 'Conecta tu cuenta de Mercado Pago.' };
   }
-  return { ...base, ...(await preflight(tenantId)) };
+  const checked = await checkTerminals(tenantId, list);
+  const first = checked.find((t) => t.ok) || checked[0];
+  return { ...base, terminalLabel: first.name, terminals: checked.map(publicTerminal), ok: checked.some((t) => t.ok), code: first.ok ? 'ready' : first.code, message: first.ok ? 'Terminal lista' : first.message };
 }
 
 const disconnect = (tenantId) => db.DeletePointConnection(tenantId);
@@ -210,18 +268,26 @@ async function assertTerminalFree(tenantId, clientSaleId, terminalId) {
 }
 
 /** Crea el cobro en la terminal. Idempotente por clientSaleId + monto mientras siga pendiente. */
-async function startCharge({ tenantId, clientSaleId, amount }) {
+async function startCharge({ tenantId, clientSaleId, amount, terminalId: wanted }) {
   if (!clientSaleId) throw httpError('Falta clientSaleId', 400);
   const value = Number(amount).toFixed(2);
   if (!(Number(value) > 0)) throw httpError('Monto inválido', 400);
 
-  const check = await preflight(tenantId);
+  // Con varias terminales hay que decir en cuál se cobra; con una sola no hace falta
+  const list = terminalsOf(await db.GetPointConnection(tenantId));
+  const chosen = wanted ? list.find((t) => t.id === String(wanted)) : list.length === 1 ? list[0] : null;
+  if (list.length && !chosen) {
+    throw httpError(wanted ? 'Esa terminal no está registrada.' : 'Elige en qué terminal se cobra.', 400, 'terminal_required');
+  }
+  const check = await preflight(tenantId, chosen?.id);
   if (!check.ok) throw httpError(check.message, 409, check.code);
-  const { terminalId } = await db.GetPointConnection(tenantId);
+  const terminalId = chosen.id;
   await assertTerminalFree(tenantId, String(clientSaleId), terminalId);
 
   const prev = await db.GetPointChargeBySale(clientSaleId, tenantId);
-  if (prev && prev.status === 'pending' && prev.amount === Number(value)) return { id: prev.id, status: 'pending' };
+  // Si ya había un cobro pendiente de esta venta en OTRA terminal, se cancela: la venta se cobra en una sola
+  if (prev && prev.status === 'pending' && prev.terminalId !== terminalId) await cancelCharge(tenantId, prev.id).catch(() => {});
+  if (prev && prev.status === 'pending' && prev.terminalId === terminalId && prev.amount === Number(value)) return { id: prev.id, status: 'pending' };
   if (prev && prev.status === 'paid' && !prev.consumedBy && prev.amount === Number(value)) return { id: prev.id, status: 'paid' };
   const attempt = (prev?.attempt || 0) + 1;
   const idem = crypto.createHash('sha256').update(`${tenantId}:${clientSaleId}:${value}:${attempt}`).digest('hex');
@@ -253,6 +319,7 @@ async function startCharge({ tenantId, clientSaleId, amount }) {
     mpOrderId: String(mpOrder.id),
     mpStatus: mpOrder.status,
     terminalId,
+    terminalName: chosen.name, // para saber en cuál terminal se cobró cada venta
     status: 'pending',
     attempt,
     consumedBy: null,
@@ -354,6 +421,8 @@ module.exports = {
   handleOAuthCallback,
   listTerminals,
   registerTerminal,
+  renameTerminal,
+  removeTerminal,
   status,
   disconnect,
   verifyWebhookSignature,

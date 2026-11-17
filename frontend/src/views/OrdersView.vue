@@ -91,11 +91,7 @@
           <div class="foot">
             <strong>{{ money(o.total) }}</strong>
             <div class="actions">
-              <router-link
-                class="link-btn"
-                :to="`/print/order/${o.id}?mode=receipt`"
-                target="_blank"
-              >Imprimir</router-link>
+              <a class="link-btn" :href="`/print/order/${o.id}?mode=receipt`" target="_blank" rel="noopener" @click="printLink($event, o)">Imprimir</a>
               <button
                 v-if="o.paymentStatus !== 'paid' && !waiting(o)"
                 type="button"
@@ -174,6 +170,7 @@ import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import TerminalNote from "../components/TerminalNote.vue";
 import UberStoreStatus from "../components/UberStoreStatus.vue";
+import { directPrinting, printCashClose, printOrder, shouldAutoPrint } from "../printing";
 import { usePointTerminal } from "../point";
 import { apiService } from "../apiService";
 import {
@@ -396,7 +393,8 @@ async function closeCash() {
     const res = await apiService.closeCashSession(Number(countedCash.value || 0));
     cashMsg.value = `Caja cerrada. Diferencia: ${money(res.session?.difference)}`;
     if (res.session?.id) {
-      router.push(`/print/cash/${res.session.id}?autoprint=1`);
+      if (directPrinting()) printCashClose(res.session.id);
+      else router.push(`/print/cash/${res.session.id}?autoprint=1`);
     }
     await loadCash();
   } catch (e) {
@@ -413,6 +411,13 @@ async function load(silent = false) {
     if (!silent) orders.value = [];
   }
   await loadCash(silent);
+}
+
+// Con térmica en este dispositivo el ticket sale directo; si no, el enlace abre la vista de impresión como siempre
+function printLink(event, o) {
+  if (!directPrinting()) return;
+  event.preventDefault();
+  printOrder(o, "receipt");
 }
 
 function openPay(o) {
@@ -448,9 +453,8 @@ async function confirmPay() {
     const id = payOrder.value.id;
     payOrder.value = null;
     await loadCash();
-    if (confirm("¿Imprimir cuenta?")) {
-      window.open(`/print/order/${id}?mode=receipt&autoprint=1`, "_blank");
-    }
+    if (shouldAutoPrint()) printOrder(updated, "receipt");
+    else if (confirm("¿Imprimir cuenta?")) printOrder(updated, "receipt", { auto: true });
   } catch (e) {
     payErr.value = e.response?.data || "No se pudo cobrar";
   } finally {

@@ -38,8 +38,15 @@ router.delete('/connection', ...owner, async (req, res) => {
 router.get('/terminals', ...owner, async (req, res) => {
   try { res.json(await point.listTerminals(req.tenantId)); } catch (e) { fail(res, e); }
 });
+// Se pueden registrar varias; cada una lleva el nombre interno que el negocio le ponga
 router.post('/terminal', ...owner, async (req, res) => {
-  try { res.json(await point.registerTerminal(req.tenantId, String(req.body?.terminalId || ''))); } catch (e) { fail(res, e); }
+  try { res.json(await point.registerTerminal(req.tenantId, String(req.body?.terminalId || ''), req.body?.name)); } catch (e) { fail(res, e); }
+});
+router.put('/terminals/:id', ...owner, async (req, res) => {
+  try { res.json(await point.renameTerminal(req.tenantId, req.params.id, req.body?.name)); } catch (e) { fail(res, e); }
+});
+router.delete('/terminals/:id', ...owner, async (req, res) => {
+  try { await point.removeTerminal(req.tenantId, req.params.id); res.sendStatus(204); } catch (e) { fail(res, e); }
 });
 
 // ——— Estado y cobros (administrador y caja) ———
@@ -48,8 +55,8 @@ router.get('/status', ...staff, async (req, res) => {
 });
 router.post('/charges', ...staff, async (req, res) => {
   try {
-    const { clientSaleId, amount } = req.body || {};
-    res.status(201).json(await point.startCharge({ tenantId: req.tenantId, clientSaleId, amount }));
+    const { clientSaleId, amount, terminalId } = req.body || {};
+    res.status(201).json(await point.startCharge({ tenantId: req.tenantId, clientSaleId, amount, terminalId }));
   } catch (e) { fail(res, e); }
 });
 router.get('/charges/:id', ...staff, async (req, res) => {

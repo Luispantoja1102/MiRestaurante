@@ -62,6 +62,7 @@
                 :href="`/print/order/${o.id}?mode=kitchen`"
                 target="_blank"
                 rel="noopener"
+                @click="kitchenTicket($event, o)"
               >Imprimir</a>
               <button
                 type="button"
@@ -90,6 +91,7 @@ import { beep, resumeAudio } from "../sound";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
 import { channelLabel, isAllergyNote, labelOf, modalityLabel } from "../labels";
+import { directPrinting, printOrder } from "../printing";
 
 const orders = ref([]);
 const loading = ref(false);
@@ -167,6 +169,13 @@ function toggleSound() {
     // Solo se pierde el recuerdo entre sesiones
   }
   if (soundOn.value) beep(); // además destraba el audio del navegador
+}
+
+// Con térmica en este dispositivo la comanda sale directo; si no, el enlace abre la vista de impresión como siempre
+function kitchenTicket(event, o) {
+  if (!directPrinting()) return;
+  event.preventDefault();
+  printOrder(o, "kitchen");
 }
 
 /** Comandas nuevas desde la última carga: se resaltan y, si hay sonido, suena. */

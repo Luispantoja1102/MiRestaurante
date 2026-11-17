@@ -261,6 +261,7 @@ import AppShell from "../components/AppShell.vue";
 import DeliveryFields from "../components/DeliveryFields.vue";
 import ChannelSelect from "../components/ChannelSelect.vue";
 import TerminalNote from "../components/TerminalNote.vue";
+import { printOrder, shouldAutoPrint } from "../printing";
 import { usePointTerminal } from "../point";
 import { channelLabel, isPlatformChannel } from "../labels";
 import { apiService } from "../apiService";
@@ -548,6 +549,7 @@ async function confirmPay() {
     pay.order = order;
     pay.done = true;
     pay.ref = "";
+    if (shouldAutoPrint()) printOrder(order, "receipt"); // térmica de este dispositivo, sin preguntar
     loadCash(true);
     loadIngredients();
     await nextTick();
@@ -562,7 +564,7 @@ async function confirmPay() {
 }
 
 function printReceipt() {
-  if (pay.order?.id) window.open(`/print/order/${pay.order.id}?mode=receipt&autoprint=1`, "_blank");
+  if (pay.order?.id) printOrder(pay.order, "receipt", { auto: true });
 }
 function newSale() {
   pay.open = false;

@@ -27,7 +27,7 @@ global.fetch = async (url, opts = {}) => {
   mpCalls.push({ url: u, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null });
   const json = (status, data) => new Response(JSON.stringify(data), { status });
   if (u.endsWith('/oauth/token')) return json(200, { access_token: 'AT-secreto', refresh_token: 'RT-secreto', user_id: 99, expires_in: 15552000 });
-  if (u.includes('/terminals/v1/list')) return json(200, { data: { terminals: [{ id: 'T1', external_pos_id: 'CAJA1', operating_mode: 'STANDALONE' }] } });
+  if (u.includes('/terminals/v1/list')) return json(200, { data: { terminals: [{ id: 'T1', external_pos_id: 'CAJA1', operating_mode: 'STANDALONE' }, { id: 'T2', external_pos_id: 'CAJA2', operating_mode: 'PDV' }] } });
   if (u.includes('/terminals/v1/setup')) return json(200, {});
   if (u.endsWith('/v1/orders')) return json(201, { id: `ord${mpCalls.length}`, status: 'created' });
   if (/\/v1\/orders\/[^/]+\/cancel$/.test(u)) return json(200, {});
@@ -138,6 +138,54 @@ test('tarjeta sin terminal sigue funcionando a mano', async () => {
   const r = await counter({ clientRef: 'ref-manual' });
   assert.equal(r.status, 201, r.text);
   assert.equal(r.json.pointChargeId, undefined);
+});
+
+test('varias terminales: cada una con su nombre, y el cobro dice en cuál se hace', async () => {
+  const put = (id, name) => api.call('PUT', `/point/terminals/${id}`, { token: admin(), body: { name } });
+  // la primera se bautiza y se agrega una segunda
+  assert.equal((await put('T1', 'Barra')).status, 200);
+  assert.equal((await api.call('POST', '/point/terminal', { token: admin(), body: { terminalId: 'T2', name: 'barra' } })).status, 409, 'nombre repetido');
+  assert.equal((await api.call('POST', '/point/terminal', { token: admin(), body: { terminalId: 'T2', name: 'Terraza' } })).status, 200);
+  assert.equal((await put('T2', '  ')).status, 400);
+  assert.equal((await put('NOPE', 'X')).status, 404);
+  assert.equal((await put('T1', 'Barra')).status, 200, 'su propio nombre no cuenta como repetido');
+
+  const st = (await api.call('GET', '/point/status', { token: cashier() })).json;
+  assert.deepEqual(st.terminals.map((t) => [t.id, t.name, t.ok]), [['T1', 'Barra', true], ['T2', 'Terraza', true]]);
+  assert.doesNotMatch(JSON.stringify(st), /secreto|accessToken/);
+
+  // con dos terminales hay que elegir; con una que no existe, también falla
+  const sale = (extra) => api.call('POST', '/point/charges', { token: cashier(), body: { amount: TOTAL, ...extra } });
+  const sinElegir = await sale({ clientSaleId: 'multi-0' });
+  assert.deepEqual([sinElegir.status, sinElegir.json.code], [400, 'terminal_required']);
+  assert.equal((await sale({ clientSaleId: 'multi-0', terminalId: 'NOPE' })).status, 400);
+
+  // cobra en la segunda: la orden va a esa terminal y la venta guarda su nombre
+  const c = await sale({ clientSaleId: 'multi-1', terminalId: 'T2' });
+  assert.equal(c.status, 201, c.text);
+  assert.equal(mpCalls.filter((x) => x.url.endsWith('/v1/orders') && x.method === 'POST').pop().body.config.point.terminal_id, 'T2');
+  mpOrder = paid(TOTAL);
+  await api.call('GET', `/point/charges/${c.json.id}`, { token: cashier() });
+  const venta = await counter({ pointChargeId: c.json.id, clientRef: 'ref-multi' });
+  assert.equal(venta.status, 201, venta.text);
+  assert.equal(venta.json.pointTerminal, 'Terraza');
+
+  // quitar una deja la otra
+  assert.equal((await api.call('DELETE', '/point/terminals/T2', { token: admin() })).status, 204);
+  assert.equal((await api.call('DELETE', '/point/terminals/T2', { token: admin() })).status, 404);
+  assert.deepEqual((await api.call('GET', '/point/status', { token: cashier() })).json.terminals.map((t) => t.name), ['Barra']);
+  assert.equal((await api.call('PUT', '/point/terminals/T1', { token: cashier(), body: { name: 'X' } })).status, 403);
+});
+
+test('una conexión de antes (una sola terminal) se sigue leyendo', async () => {
+  const conn = state.pointConns.find((c) => c.tenantId === 't1');
+  const { terminals, ...rest } = conn;
+  Object.keys(conn).forEach((k) => delete conn[k]);
+  Object.assign(conn, rest, { terminalId: 'T1', terminalLabel: 'CAJA1' });
+  const st = (await api.call('GET', '/point/status', { token: cashier() })).json;
+  assert.deepEqual([st.ok, st.terminalLabel, st.terminals.length], [true, 'CAJA1', 1]);
+  mpOrder = { status: 'created', payment: null };
+  assert.equal((await api.call('POST', '/point/charges', { token: cashier(), body: { clientSaleId: 'legacy-1', amount: TOTAL } })).status, 201, 'sin elegir, usa la única');
 });
 
 test('el webhook exige la firma de Mercado Pago', async () => {

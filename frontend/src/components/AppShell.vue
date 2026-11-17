@@ -123,6 +123,7 @@ import { clearSession, canAccessRoute, hasRole } from "../authStore";
 import { apiService } from "../apiService";
 import { isCounterMode } from "../roles";
 import { liveState as live } from "../live";
+import { startPrinterWatch } from "../thermalPrinter";
 import {
   alertsState,
   waiterAlerts,
@@ -192,6 +193,7 @@ const allMore = [
   { to: "/billing", name: "billing", label: "Facturación / Planes" },
   { to: "/settings", name: "settings", label: "Configuración" },
   { to: "/support", name: "support", label: "Soporte" },
+  { to: "/printer", name: "printer", label: "Impresora" },
 ];
 
 // En café "Pedido" no existe (se vende en el Mostrador): esa pantalla es solo el menú del admin
@@ -247,6 +249,7 @@ onMounted(() => {
   loadBilling();
   startWaiterAlerts();
   startOrderAlerts();
+  startPrinterWatch(); // si este dispositivo imprime en una térmica, la conecta y la mantiene conectada
 });
 onUnmounted(() => clearInterval(timer));
 </script>

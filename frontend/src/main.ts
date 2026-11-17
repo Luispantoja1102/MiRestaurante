@@ -35,6 +35,7 @@ import InviteAcceptView from "./views/InviteAcceptView.vue";
 import ForgotPasswordView from "./views/ForgotPasswordView.vue";
 import ResetPasswordView from "./views/ResetPasswordView.vue";
 import PrintOrderView from "./views/PrintOrderView.vue";
+import PrinterView from "./views/PrinterView.vue";
 import PrintCashCloseView from "./views/PrintCashCloseView.vue";
 import BillingView from "./views/BillingView.vue";
 import PlatformAdminView from "./views/PlatformAdminView.vue";
@@ -91,6 +92,12 @@ const routes: RouteRecordRaw[] = [
     name: "partner",
     component: PartnerView,
     meta: { requiresAuth: true, roles: screenRoles("partner") },
+  },
+  {
+    path: "/printer",
+    name: "printer",
+    component: PrinterView,
+    meta: { requiresAuth: true, roles: screenRoles("printer") },
   },
   {
     path: "/print/order/:id",
