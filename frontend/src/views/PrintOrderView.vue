@@ -75,7 +75,7 @@
 
             <!-- ===== Cuenta del cliente ===== -->
             <template v-else>
-              <p class="tk-sec">Su orden</p>
+              <p class="tk-sec">{{ t.orderTitle }}</p>
               <div class="rt-menu">
                 <div v-for="(item, i) in t.items" :key="i" class="rt-dish">
                   <span class="rt-qty">{{ item.qty }}×</span>
@@ -141,8 +141,8 @@
                 </div>
               </div>
 
-              <p class="rt-bye">¡Buen provecho!</p>
-              <p class="rt-thanks">Gracias por su visita · Le esperamos pronto</p>
+              <p class="rt-bye">{{ t.bye }}</p>
+              <p class="rt-thanks">{{ t.thanks }}</p>
               <p class="tk-note pr-legal">Este comprobante no es factura fiscal. Solicite factura en caja si aplica.</p>
             </template>
 

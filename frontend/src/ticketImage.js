@@ -2,6 +2,7 @@
 // Usa los mismos datos que el ticket de texto (orderTicketData). Solo corre en el navegador.
 // Se dibuja compacta: una imagen más corta se transmite y se imprime más rápido.
 import { money, rasterBytes } from "./escpos";
+import { TICKET_ICONS } from "./ticketData";
 
 const DISPLAY = '"Bricolage Grotesque","Georgia","Times New Roman",serif';
 const HAND = '"Caveat","Segoe Print","Bradley Hand",cursive';
@@ -194,9 +195,25 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
     y += S(24);
   };
 
-  // Servicio de mesa: tenedor, plato y cuchillo con una línea a cada lado
+  // Un icono de TICKET_ICONS (cuadrícula de 24) centrado en (cx, cy)
+  const drawIcon = (name, cx, cy, size) => {
+    g.save();
+    g.translate(cx - size / 2, cy - size / 2);
+    g.scale(size / 24, size / 24);
+    g.lineWidth = 1.8;
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    for (const p of TICKET_ICONS[name] || []) {
+      const path = new Path2D(p.d);
+      if (p.fill) g.fill(path);
+      else g.stroke(path);
+    }
+    g.restore();
+  };
+  // Tres iconos del rubro (servicio de mesa, taza, copa, campana…) con una línea a cada lado
   const tableSetting = () => {
-    const yc = y + S(17);
+    const yc = y + S(18);
+    const [a, b, c2] = t.icons || ["fork", "plate", "knife"];
     g.lineWidth = S(2);
     g.beginPath();
     g.moveTo(L, yc);
@@ -204,42 +221,10 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
     g.moveTo(mid + S(74), yc);
     g.lineTo(R, yc);
     g.stroke();
-    // plato
-    g.lineWidth = S(2.2);
-    g.beginPath();
-    g.arc(mid, yc, S(16), 0, Math.PI * 2);
-    g.stroke();
-    g.beginPath();
-    g.arc(mid, yc, S(9.5), 0, Math.PI * 2);
-    g.stroke();
-    // tenedor
-    const fx = mid - S(46);
-    g.lineWidth = S(2.4);
-    g.lineCap = "round";
-    g.beginPath();
-    for (const dx of [-6, 0, 6]) {
-      g.moveTo(fx + S(dx), yc - S(16));
-      g.lineTo(fx + S(dx), yc - S(4));
-    }
-    g.moveTo(fx - S(6), yc - S(4));
-    g.arc(fx, yc - S(4), S(6), Math.PI, 0, true);
-    g.moveTo(fx, yc + S(2));
-    g.lineTo(fx, yc + S(17));
-    g.stroke();
-    // cuchillo
-    const kx = mid + S(46);
-    g.beginPath();
-    g.moveTo(kx - S(3), yc + S(17));
-    g.lineTo(kx - S(3), yc - S(16));
-    g.bezierCurveTo(kx + S(9), yc - S(12), kx + S(10), yc - S(2), kx + S(6), yc + S(4));
-    g.lineTo(kx - S(3), yc + S(4));
-    g.closePath();
-    g.fill();
-    g.beginPath();
-    g.moveTo(kx - S(3), yc + S(4));
-    g.lineTo(kx - S(3), yc + S(17));
-    g.stroke();
-    g.lineCap = "butt";
+    const side = (name) => (["diamond", "star"].includes(name) ? S(22) : S(36));
+    drawIcon(b, mid, yc, S(38));
+    drawIcon(a, mid - S(46), yc, side(a));
+    drawIcon(c2, mid + S(46), yc, side(c2));
     y += S(40);
   };
 
@@ -336,7 +321,7 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
   y += S(4);
 
   // ——— Su orden ———
-  section("SU ORDEN");
+  section(String(t.orderTitle || "Su orden").toUpperCase());
   for (const item of t.items) {
     const startY = y;
     font(26, "800", DISPLAY);
@@ -453,8 +438,8 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
   }
 
   // ——— Despedida ———
-  center("¡Buen provecho!", 38, "700", HAND, "", 1.05);
-  center("Gracias por su visita · Le esperamos pronto", 14, "700");
+  center(t.bye || "¡Gracias!", 38, "700", HAND, "", 1.05);
+  center(t.thanks || "Gracias por su visita", 14, "700");
   y += S(4);
   center("Este comprobante no es factura fiscal. Solicite factura en caja si aplica.", 11, "400", SANS, "", 1.3);
   center(`Folio ${t.folio}`, 11, "700");

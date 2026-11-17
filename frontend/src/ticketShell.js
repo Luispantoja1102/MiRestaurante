@@ -65,17 +65,6 @@ export function useTicketShell(fallbackPath = "/orders") {
 
 export const folioOf = (id) => String(id || "").slice(-6).toUpperCase();
 
-export const closingLine = () => "¡Gracias por su visita!";
-export const closingNote = () => "Buen provecho · Le esperamos pronto";
-
-export const BUSINESS_TYPE_LABEL = {
-  restaurant: "Restaurante",
-  cafe: "Café",
-  bar: "Bar",
-  hotel: "Hotel · Restaurante",
-  other: "Establecimiento",
-};
-
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const DAYS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 export const monthShort = (m) => MONTHS[m - 1];

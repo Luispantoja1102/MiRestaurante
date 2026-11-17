@@ -8,7 +8,7 @@ import { channelLabel, modalityLabel } from "./labels";
 import { buildCashClose, buildKitchen, buildReceipt } from "./escpos";
 import { cashTicketData, orderTicketData } from "./ticketData";
 import { receiptImageBytes, widthTestBytes } from "./ticketImage";
-import { directPrinting, inkThreshold, paperCols, paperDots, printBytes, printerStore } from "./thermalPrinter";
+import { directPrinting, paperCols, paperDots, printBytes, printerStore } from "./thermalPrinter";
 
 const venue = () => ({
   shop: venueStore.businessName,
@@ -29,7 +29,7 @@ async function receiptBytes(t, cols, openDrawer) {
   if (printerStore.ticketStyle === "image") {
     try {
       const logoUrl = venueStore.logoUrl && venueStore.logoUrl !== "/logo.svg" ? venueStore.logoUrl : "";
-      return await receiptImageBytes(t, { width: paperDots(), logoUrl, openDrawer, threshold: inkThreshold() });
+      return await receiptImageBytes(t, { width: paperDots(), logoUrl, openDrawer });
     } catch (e) {
       console.warn("[printing] ticket en imagen no disponible, se imprime en texto", e);
       imageProblem = e?.message || String(e);

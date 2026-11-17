@@ -2,11 +2,12 @@
   <header class="tk-head">
     <img v-if="logo" class="tk-logo" :src="logo" alt="" />
     <!-- Servicio de mesa: tenedor, plato y cuchillo -->
+    <!-- Tres iconos según el tipo de establecimiento (servicio de mesa, taza, copa, campana…) -->
     <div class="tk-setting" aria-hidden="true">
       <i></i>
-      <svg viewBox="0 0 24 24" class="tk-cutlery" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v6M10 3v6M13 3v6M7 9a3 3 0 0 0 6 0M10 12v9" /></svg>
-      <svg viewBox="0 0 24 24" class="tk-plate" fill="none" stroke="#000" stroke-width="1.7"><circle cx="12" cy="12" r="9.5" /><circle cx="12" cy="12" r="5.6" /></svg>
-      <svg viewBox="0 0 24 24" class="tk-cutlery" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21V3c3.4 1.4 4.8 4.6 4.8 9H9" fill="#000" /></svg>
+      <svg v-for="(name, i) in icons" :key="i" viewBox="0 0 24 24" :class="i === 1 ? 'tk-plate' : 'tk-cutlery'" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path v-for="(p, j) in TICKET_ICONS[name]" :key="j" :d="p.d" :fill="p.fill ? '#000' : 'none'" />
+      </svg>
       <i></i>
     </div>
     <p class="tk-shop">{{ name }}</p>
@@ -19,7 +20,7 @@
 <script setup>
 import { computed } from "vue";
 import { venueStore } from "../venueStore";
-import { BUSINESS_TYPE_LABEL } from "../ticketShell";
+import { TICKET_ICONS, ticketProfile } from "../ticketData";
 
 // Sin props usa los datos guardados; con props sirve de vista previa
 const props = defineProps({
@@ -27,7 +28,9 @@ const props = defineProps({
 });
 const src = computed(() => props.preview || venueStore);
 const name = computed(() => src.value.businessName || "MiRestaurante");
-const kind = computed(() => BUSINESS_TYPE_LABEL[src.value.businessType] || BUSINESS_TYPE_LABEL.restaurant);
+const profile = computed(() => ticketProfile(src.value.businessType));
+const kind = computed(() => profile.value.label);
+const icons = computed(() => profile.value.icons);
 const address = computed(() => src.value.address || "");
 const phone = computed(() => src.value.phone || "");
 // El logo propio del negocio (no el de la app) sale en blanco y negro

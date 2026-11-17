@@ -16,7 +16,7 @@ test.before(async () => {
 const has = (bytes, seq) => Buffer.from(bytes).toString('latin1').includes(Buffer.from(seq).toString('latin1'));
 const text = (bytes) => Buffer.from(bytes).toString('latin1');
 const labels = { modality: { 'dine-in': 'En mesa', takeaway: 'Para llevar', delivery: 'A domicilio' }, channel: { uber: 'Uber Eats', phone: 'Teléfono' } };
-const venue = { shop: 'Café Prueba', businessType: 'cafe', address: 'Calle 5 de Mayo 12', phone: '664 123 4567', cashier: 'caro', now: new Date(2026, 10, 17, 9, 5) };
+const venue = { shop: 'Café Prueba', businessType: 'restaurant', address: 'Calle 5 de Mayo 12', phone: '664 123 4567', cashier: 'caro', now: new Date(2026, 10, 17, 9, 5) };
 
 const ORDER = {
   id: '6afba06b5a4fd99c0ca993db',
@@ -58,7 +58,7 @@ test('cuenta de 80 mm: inicia, imprime lo cobrado, abre el cajón y corta', () =
   assert.ok(has(bytes, [0x1b, 0x70, 0x00]), 'pulso al cajón');
   assert.ok(has(bytes, [0x1d, 0x56, 0x42]), 'corte');
   const s = text(bytes);
-  for (const fragment of ['PRUEBA', 'CUENTA / RECIBO', 'Latte', 'Sirope', 'sin az', 'TOTAL', '141.48', 'Efectivo', '58.52', 'PAGADO', 'Sin hielo', 'GRACIAS POR SU VISITA']) {
+  for (const fragment of ['PRUEBA', 'CUENTA / RECIBO', 'Latte', 'Sirope', 'sin az', 'TOTAL', '141.48', 'Efectivo', '58.52', 'PAGADO', 'Sin hielo', 'BUEN PROVECHO!', 'Gracias por su visita', 'RESTAURANTE']) {
     assert.ok(s.includes(fragment), `trae «${fragment}»`);
   }
 });
@@ -69,6 +69,32 @@ test('la propina sugerida solo sale en cuentas de mesa, no en el mostrador', () 
   const mostrador = text(esc.buildReceipt(data.orderTicketData({ ...ORDER, source: 'counter' }, venue, labels), { cols: 42 }));
   assert.ok(!mostrador.includes('PROPINA'));
   assert.ok(mostrador.includes('MOSTRADOR'));
+});
+
+test('cada rubro tiene su etiqueta, sus iconos, su cierre y su regla de propina', () => {
+  const by = (businessType) => data.orderTicketData(ORDER, { ...venue, businessType }, labels);
+  const casos = {
+    restaurant: { kind: 'RESTAURANTE', icons: ['fork', 'plate', 'knife'], bye: '¡Buen provecho!', tips: true },
+    cafe: { kind: 'CAFÉ', icons: ['spoon', 'cup', 'bean'], bye: '¡Que lo disfrutes!', tips: false },
+    bar: { kind: 'BAR', icons: ['diamond', 'martini', 'diamond'], bye: '¡Salud!', tips: true },
+    hotel: { kind: 'HOTEL · RESTAURANTE', icons: ['star', 'bell', 'star'], bye: '¡Buen provecho!', tips: true },
+    other: { kind: 'ESTABLECIMIENTO', icons: ['star', 'tag', 'star'], bye: '¡Gracias!', tips: false },
+  };
+  for (const [rubro, esperado] of Object.entries(casos)) {
+    const t = by(rubro);
+    assert.equal(t.kind, esperado.kind, rubro);
+    assert.deepEqual(t.icons, esperado.icons, rubro);
+    assert.equal(t.bye, esperado.bye, rubro);
+    assert.equal(t.tips.length > 0, esperado.tips, `propina en ${rubro}`);
+    for (const name of t.icons) assert.ok(data.TICKET_ICONS[name]?.length, `icono ${name} definido`);
+    const s = text(esc.buildReceipt(t, { cols: 42 }));
+    assert.ok(s.includes(text(esc.encodeText(esperado.kind))), `etiqueta en el ticket de texto de ${rubro}`);
+    assert.ok(s.includes(text(esc.encodeText(esperado.bye.slice(1).toUpperCase()))), `cierre en el ticket de texto de ${rubro}`);
+    assert.equal(s.includes('PROPINA SUGERIDA'), esperado.tips, `propina en el texto de ${rubro}`);
+  }
+  // un rubro desconocido o vacío se trata como restaurante
+  assert.equal(by('lo-que-sea').kind, 'RESTAURANTE');
+  assert.equal(by(undefined).bye, '¡Buen provecho!');
 });
 
 test('cuenta sin cobrar: pendiente de pago, sin cajón y sin recibido', () => {

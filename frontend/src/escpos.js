@@ -148,8 +148,6 @@ export function money(n) {
   return `${v < 0 ? "-" : ""}$${moneyFmt.format(Math.abs(v))}`; // la diferencia de caja puede ser negativa: -$10.00
 }
 
-const THANKS = "¡GRACIAS POR SU VISITA!";
-
 /** Encabezado del negocio, igual en todos los tickets. */
 function header(p, t, { cols, banner }) {
   const half = Math.floor(cols / 2);
@@ -215,8 +213,8 @@ export function buildReceipt(t, { cols = 42, openDrawer = false } = {}) {
   }
   if (t.notes) p.rule().wrapped(`OBS: ${t.notes}`);
 
-  p.rule("=").align("center").bold().line(THANKS).bold(false);
-  p.line("Le esperamos pronto");
+  p.rule("=").align("center").bold().line(String(t.bye || "¡Gracias!").toUpperCase()).bold(false);
+  p.wrapped(t.thanks || "Gracias por su visita");
   p.wrapped("Este comprobante no es factura fiscal. Solicite factura en caja si aplica.");
   p.feed(1).line("Hecho con MiRestaurante").align("left").feed(3).cut();
   return p.build();

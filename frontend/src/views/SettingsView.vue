@@ -278,15 +278,6 @@
                 <strong>Texto sencillo</strong><small>Sale mucho más rápido: úsalo en horas de mucho servicio.</small>
               </button>
             </div>
-            <label v-if="pd.ticketStyle === 'image'" class="field">
-              <span>Intensidad del diseño</span>
-              <select :value="pd.ink" @change="pd.ink = $event.target.value">
-                <option value="light">Clara</option>
-                <option value="normal">Normal</option>
-                <option value="dark">Oscura (letras más llenas)</option>
-              </select>
-              <small class="hint">Si las letras pequeñas salen muy claras, usa «Oscura».</small>
-            </label>
             <div class="pr-switch-row">
               <div>
                 <h3>Imprimir el ticket al cobrar</h3>
@@ -595,7 +586,7 @@ const printerLine = computed(() => {
   return `Elegida: ${name} (se conecta al imprimir)`;
 });
 // Los cambios se editan en un borrador y se guardan con el botón «Guardar cambios»
-const PRINTER_KEYS = ["mode", "paper", "dots80", "ink", "ticketStyle", "autoPrint", "drawer", "baudRate"];
+const PRINTER_KEYS = ["mode", "paper", "dots80", "ticketStyle", "autoPrint", "drawer", "baudRate"];
 const printerSaved = () => Object.fromEntries(PRINTER_KEYS.map((k) => [k, printerStore[k]]));
 const pd = reactive(printerSaved());
 const printerDirty = computed(() => PRINTER_KEYS.some((k) => pd[k] !== printerStore[k]));
