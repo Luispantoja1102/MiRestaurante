@@ -12,10 +12,10 @@ const settingsSchema = Joi.object({
   logoUrl: Joi.string().allow('').max(8_000_000).optional(),
   primaryColor: Joi.string()
     .pattern(/^#([0-9A-Fa-f]{6})$/)
-    .default('#1F4D3A'),
+    .default('#D0371F'),
   accentColor: Joi.string()
     .pattern(/^#([0-9A-Fa-f]{6})$/)
-    .default('#C4A574'),
+    .default('#E8A020'),
   timezone: Joi.string().default('America/Mexico_City'),
   initialTables: Joi.number().integer().min(0).max(100).default(0),
   setupCompleted: Joi.boolean().default(true),

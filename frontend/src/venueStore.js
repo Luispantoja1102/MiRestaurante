@@ -1,5 +1,6 @@
 import { reactive, watch } from "vue";
 import { apiClient } from "./apiService";
+import { DEFAULT_ACCENT, DEFAULT_PRIMARY, applyBrand } from "./brandTheme";
 
 const STORAGE_KEY = "mirestaurante_venue_settings";
 
@@ -11,8 +12,8 @@ const defaultSettings = {
   address: "",
   phone: "",
   logoUrl: "/logo.svg",
-  primaryColor: "#1A4A38",
-  accentColor: "#B8956C",
+  primaryColor: DEFAULT_PRIMARY,
+  accentColor: DEFAULT_ACCENT,
   timezone: "America/Mexico_City",
   initialTables: 8,
   setupCompleted: false,
@@ -33,6 +34,13 @@ export const venueStore = reactive({
   loading: false,
   ready: false,
 });
+
+// Los colores de la marca (sacados del logo) se aplican desde lo guardado en este dispositivo, antes de pintar
+applyBrand(venueStore.primaryColor, venueStore.accentColor);
+watch(
+  () => [venueStore.primaryColor, venueStore.accentColor],
+  ([primary, accent]) => applyBrand(primary, accent)
+);
 
 watch(
   venueStore,

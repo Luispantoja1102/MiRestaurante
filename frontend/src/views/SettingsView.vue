@@ -55,7 +55,12 @@
             </label>
             <label>Dirección<input v-model="form.address" maxlength="200" /></label>
             <label>Teléfono<input v-model="form.phone" maxlength="30" /></label>
-            <label>Logo (URL)<input v-model="form.logoUrl" /></label>
+            <LogoPicker
+              v-model:logo-url="form.logoUrl"
+              v-model:primary-color="form.primaryColor"
+              v-model:accent-color="form.accentColor"
+              hint="Paleta de tu logo (se guarda con «Guardar cambios»)"
+            />
             <label>Zona horaria
               <select v-model="form.timezone">
                 <option value="America/Mexico_City">Ciudad de México</option>
@@ -193,7 +198,7 @@
 
         <!-- Apariencia -->
         <section v-else-if="section === 'apariencia'" class="panel">
-          <p class="hint">Paleta MiRestaurante fija (verde bosque + acento bronce). Solo eliges claro u oscuro.</p>
+          <p class="hint">Los colores de tu negocio salen de tu logo (en «Datos y logo»). Aquí eliges si la app se ve en claro u oscuro.</p>
           <div class="theme-switch" role="group" aria-label="Tema de interfaz">
             <button type="button" :class="{ on: !isDark }" @click="applyUiTheme('light')"><span class="theme-ico" aria-hidden="true">☀</span> Claro</button>
             <button type="button" :class="{ on: isDark }" @click="applyUiTheme('dark')"><span class="theme-ico" aria-hidden="true">☾</span> Oscuro</button>
@@ -224,7 +229,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import FocusPicker from "../components/FocusPicker.vue";
@@ -235,6 +240,8 @@ import UberConnect from "../components/UberConnect.vue";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
 import { saveVenueSettings, venueStore } from "../venueStore";
+import { DEFAULT_ACCENT, DEFAULT_PRIMARY, applyBrand } from "../brandTheme";
+import LogoPicker from "../components/LogoPicker.vue";
 import { themeStore, applyUiTheme } from "../themeStore";
 import { inviteStatusLabel, labelOf, roleLabel } from "../labels";
 import { ROLE_DEFS, focusFor, focusInfo } from "../roles";
@@ -309,8 +316,8 @@ const form = reactive({
   address: venueStore.address || "",
   phone: venueStore.phone || "",
   logoUrl: venueStore.logoUrl || "/logo.svg",
-  primaryColor: venueStore.primaryColor || "#1F4D3A",
-  accentColor: venueStore.accentColor || "#C4A574",
+  primaryColor: venueStore.primaryColor || DEFAULT_PRIMARY,
+  accentColor: venueStore.accentColor || DEFAULT_ACCENT,
   timezone: venueStore.timezone || "America/Mexico_City",
   initialTables: venueStore.initialTables || 8,
 });
@@ -319,6 +326,9 @@ const hasTables = computed(() => focusInfo(form.serviceFocus).mode !== "counter"
 const saving = ref(false);
 const message = ref("");
 const messageIsError = ref(false);
+
+// Una vista previa que no se guardó no se queda: al salir vuelven los colores guardados
+onUnmounted(() => applyBrand(venueStore.primaryColor, venueStore.accentColor));
 
 async function saveBrand() {
   saving.value = true;

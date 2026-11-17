@@ -44,13 +44,21 @@ function announce(fresh) {
   }
 }
 
+// Un pedido cuya ventana de Uber ya terminó (Uber lo cancela solo) no debe seguir sonando
+const alive = (o) => !o.external?.deadline || new Date(o.external.deadline).getTime() > Date.now();
+let retry = false; // la última consulta falló: se reintenta en el siguiente ciclo
+
 async function poll() {
   // Con la pestaña oculta solo se sigue consultando si hay permiso para avisar
   if (document.hidden && platformAlerts.permission !== "granted") return;
   try {
-    platformAlerts.orders = (await apiService.getAwaitingOrders()) || [];
+    platformAlerts.orders = ((await apiService.getAwaitingOrders()) || []).filter(alive);
+    retry = false;
   } catch {
-    return; // Reintenta en el siguiente ciclo
+    // Sin servidor no se sabe qué hay pendiente: no se sigue sonando con una lista vieja
+    platformAlerts.orders = [];
+    retry = true;
+    return;
   }
   const fresh = platformAlerts.orders.filter((o) => !announced.has(o.id));
   fresh.forEach((o) => announced.add(o.id));
@@ -71,7 +79,11 @@ export async function startOrderAlerts() {
     binding = bindLive(["orders"], () => poll(), { background: () => platformAlerts.permission === "granted" });
     await binding.ready;
     // Mientras haya pedidos sin responder, vuelve a sonar hasta que alguien los atienda
-    repeat = setInterval(() => platformAlerts.orders.length && beep(), REPEAT_MS);
+    repeat = setInterval(() => {
+      platformAlerts.orders = platformAlerts.orders.filter(alive); // los vencidos dejan de contar y de sonar
+      if (retry) poll();
+      else if (platformAlerts.orders.length) beep();
+    }, REPEAT_MS);
     await poll();
   } finally {
     starting = false;

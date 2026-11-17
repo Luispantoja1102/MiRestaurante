@@ -73,7 +73,7 @@
       <!-- Paso 4: Identidad -->
       <section v-else-if="step === 4" class="step-body">
         <h2>Logo del negocio</h2>
-        <p>El sistema usa colores fijos (claro/oscuro). Aquí solo personalizas el logo del cliente.</p>
+        <p>Sube el logo de tu negocio: con sus colores armamos la paleta de toda la app (claro y oscuro).</p>
 
         <div class="identity-preview">
           <img :src="previewLogo" alt="Vista previa del logo" class="preview-logo" />
@@ -83,15 +83,7 @@
           </div>
         </div>
 
-        <label class="field">
-          <span>Logo (URL)</span>
-          <input v-model="form.logoUrl" type="url" placeholder="https://... o deja /logo.svg" />
-        </label>
-
-        <label class="field">
-          <span>Subir logo</span>
-          <input type="file" accept="image/*" @change="onLogoFile" />
-        </label>
+        <LogoPicker v-model:logo-url="form.logoUrl" v-model:primary-color="form.primaryColor" v-model:accent-color="form.accentColor" />
       </section>
 
       <!-- Paso 5: Operación -->
@@ -162,11 +154,13 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { saveVenueSettings, venueStore } from "../venueStore";
 import { homeForRole } from "../authStore";
 import FocusPicker from "../components/FocusPicker.vue";
+import LogoPicker from "../components/LogoPicker.vue";
+import { DEFAULT_ACCENT, DEFAULT_PRIMARY, applyBrand } from "../brandTheme";
 import { focusInfo } from "../roles";
 
 const router = useRouter();
@@ -191,8 +185,8 @@ const form = reactive({
   address: venueStore.address || "",
   phone: venueStore.phone || "",
   logoUrl: venueStore.logoUrl || "/logo.svg",
-  primaryColor: venueStore.primaryColor || "#1F4D3A",
-  accentColor: venueStore.accentColor || "#C4A574",
+  primaryColor: venueStore.primaryColor || DEFAULT_PRIMARY,
+  accentColor: venueStore.accentColor || DEFAULT_ACCENT,
   timezone: venueStore.timezone || "America/Mexico_City",
   initialTables: venueStore.initialTables || 8,
 });
@@ -230,19 +224,8 @@ function prev() {
   step.value = Math.max(1, step.value - 1);
 }
 
-function onLogoFile(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  if (file.size > 2 * 1024 * 1024) {
-    error.value = "El logo debe pesar menos de 2 MB.";
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    form.logoUrl = String(reader.result);
-  };
-  reader.readAsDataURL(file);
-}
+// Una vista previa que no se guardó no se queda: al salir vuelven los colores guardados
+onUnmounted(() => applyBrand(venueStore.primaryColor, venueStore.accentColor));
 
 async function finish() {
   if (!canContinue.value) return;
