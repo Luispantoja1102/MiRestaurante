@@ -182,8 +182,8 @@
           </p>
 
           <UberStoreStatus v-if="uber.storeId" show-auto />
-          <UberPricing v-if="uber.storeId" />
-          <UberMenu v-if="uber.storeId" />
+          <UberPricing v-if="uber.storeId" @saved="menuKey += 1" />
+          <UberMenu v-if="uber.storeId" :key="menuKey" />
           <UberMetrics v-if="uber.storeId" />
           <p v-if="uber.error" class="err" role="alert">{{ uber.error }}</p>
         </section>
@@ -624,6 +624,8 @@ async function unlinkUber() {
     uber.busy = false;
   }
 }
+
+const menuKey = ref(0); // al guardar los precios de Uber, el bloque del menú se vuelve a leer
 
 // ——— Impresora de este dispositivo ———
 const PRINTER_MODES = [

@@ -817,6 +817,10 @@ test('precios para Uber: el menú sube lo que cobra Uber y en el local no cambia
   assert.ok(esperado.price > foodPrice && esperado.net >= foodPrice, 'a ti te queda al menos lo mismo');
   assert.equal(state.foods.find((f) => f.id === 'f-latte').price, foodPrice, 'el precio del local no se toca');
 
+  // el estado del menú avisa si los precios están ajustados (para no publicar por descuido con los del local)
+  const st = await api.call('GET', '/integrations/uber/menu', { token: admin() });
+  assert.deepEqual([st.json.pricing.enabled, st.json.pricing.label, st.json.pricing.cutPct], [true, 'Plus', 31.32]);
+
   // la vista previa trae local, Uber y lo que te queda por platillo
   const prev = await api.call('GET', '/integrations/uber/pricing', { token: admin() });
   const row = prev.json.rows.find((x) => x.id === 'f-latte');
@@ -830,6 +834,7 @@ test('precios para Uber: el menú sube lo que cobra Uber y en el local no cambia
   await put({ enabled: false, plan: 'plus', rounding: 1 });
   await settle();
   assert.equal(sent(), Math.round(foodPrice * 100), 'sin precios para Uber se publica el precio del menú');
+  assert.equal((await api.call('GET', '/integrations/uber/menu', { token: admin() })).json.pricing.enabled, false);
 });
 
 test('sin credenciales de Uber el webhook responde 503', async () => {

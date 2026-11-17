@@ -61,6 +61,7 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { apiService } from "../apiService";
 
+const emit = defineEmits(["saved"]);
 const form = reactive({ enabled: false, plan: "plus", commissionPct: 27, marketingPct: 0, rounding: 1 });
 const saved = ref("");
 const plans = ref({});
@@ -121,6 +122,7 @@ async function save() {
   err.value = "";
   try {
     apply(await apiService.uberSetPricing({ enabled: form.enabled, plan: form.plan, commissionPct: Number(form.commissionPct), marketingPct: Number(form.marketingPct) || 0, rounding: form.rounding }));
+    emit("saved"); // el bloque del menú vuelve a leer si los precios están ajustados
     msg.value = form.enabled ? "Guardado. El menú se actualiza en Uber Eats con los precios nuevos." : "Guardado: el menú sale con tus precios normales.";
   } catch (e) {
     err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar.";

@@ -6,6 +6,15 @@
     </p>
     <p v-else class="mn-line mn-warn">Aún no has publicado tu menú: Uber Eats no sabe qué vendes.</p>
 
+    <!-- Que no se publique por descuido con los precios del local: Uber se quedaría su comisión de tu ganancia -->
+    <p v-if="m.pricing.enabled" class="mn-line mn-ok">
+      ✓ Precios ajustados al plan {{ m.pricing.label }}: Uber se queda cerca del {{ m.pricing.cutPct }}% y a ti te queda lo mismo que en tu local.
+    </p>
+    <p v-else class="mn-line mn-warn">
+      ⚠ Tus precios en Uber Eats NO están ajustados: el menú saldría con los precios de tu local y Uber se quedaría su comisión de tu ganancia.
+      Actívalos arriba, en «Precios en Uber Eats».
+    </p>
+
     <p v-if="m.published && m.dirty" class="mn-line mn-warn">Hay cambios en tus productos que todavía no están en Uber Eats.</p>
 
     <div class="mn-row">
@@ -36,7 +45,7 @@
 import { onMounted, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 
-const m = reactive({ published: false, publishedAt: null, hours: { open: "00:00", close: "23:59" }, items: 0, foods: 0, outOfStock: [], dirty: false, autoPublish: true });
+const m = reactive({ published: false, publishedAt: null, hours: { open: "00:00", close: "23:59" }, items: 0, foods: 0, outOfStock: [], dirty: false, autoPublish: true, pricing: { enabled: false, label: "", cutPct: 0 } });
 const open = ref("00:00");
 const close = ref("23:59");
 const busy = ref(false);
@@ -69,7 +78,10 @@ async function toggleAuto(value) {
 }
 
 async function publish() {
-  if (!confirm("Esto reemplaza el menú que tienes en Uber Eats por el de MiRestaurante. ¿Continuar?")) return;
+  const question = m.pricing.enabled
+    ? "Esto reemplaza el menú que tienes en Uber Eats por el de MiRestaurante, con los precios ajustados a tu plan. ¿Continuar?"
+    : "⚠ Tus precios en Uber Eats NO están ajustados: el menú saldría con los precios de tu local y Uber se quedaría su comisión de tu ganancia.\n\nEsto además reemplaza el menú que tienes en Uber Eats. ¿Publicar de todos modos?";
+  if (!confirm(question)) return;
   busy.value = true;
   msg.value = "";
   err.value = "";
@@ -91,6 +103,7 @@ onMounted(load);
 .mn { display: grid; gap: 0.45rem; padding: 0.7rem 0.9rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.8rem; background: var(--mirestaurante-panel-elevated); }
 .mn-line { margin: 0; font-size: 0.9rem; }
 .mn-warn { color: var(--mirestaurante-warning); font-weight: 600; }
+.mn-ok { color: var(--mirestaurante-success); font-weight: 600; }
 .mn-row { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.9rem; }
 .mn-row label { display: inline-flex; align-items: center; gap: 0.4rem; }
 .mn-row input { min-height: 2rem; border-radius: 0.5rem; border: 1px solid var(--mirestaurante-line); background: var(--mirestaurante-panel); color: var(--mirestaurante-ink); font: inherit; }

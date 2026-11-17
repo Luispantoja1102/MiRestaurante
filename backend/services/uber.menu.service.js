@@ -153,6 +153,11 @@ async function menuStatus(tenantId) {
     items: (link?.publishedItemIds || []).length,
     dirty: !!link?.menuDirty,
     autoPublish: link?.autoPublish !== false,
+    // ¿Los precios salen ajustados a lo que cobra Uber? Si no, el menú se publica con los precios del local
+    pricing: (() => {
+      const p = { ...DEFAULT_PRICING, ...(link?.pricing || {}) };
+      return { enabled: !!p.enabled, plan: p.plan, label: PLANS[p.plan]?.label || '', cutPct: Math.round(uberCut(p) * 10000) / 100 };
+    })(),
     foods: foods.length,
     outOfStock: foods.filter((f) => out.has(String(f.id))).map((f) => f.name),
   };
