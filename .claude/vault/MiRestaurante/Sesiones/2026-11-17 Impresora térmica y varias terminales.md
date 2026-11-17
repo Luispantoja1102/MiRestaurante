@@ -14,6 +14,16 @@
 - **Cuenta con diseño de restaurante** (imagen): `ticketImage.js` dibuja la cuenta en canvas (logo tramado, mesa en recuadro, consumo con cantidades, total enmarcado, propina sugerida, sello PAGADO o «Pendiente de pago», borde recortado) y `rasterBytes` (`escpos.js`) la manda como GS v 0 en bandas de 200 filas. Ajuste `ticketStyle` (image por defecto | text) en Ajustes → Impresora; si el dibujo falla, sale en texto. Solo la cuenta: la comanda y el corte siguen en texto.
 - **Botón «Imprimir cuenta»** en la hoja de la mesa (`MainComponent.vue`): imprime la cuenta abierta sin cobrar.
 
+- **Ventana de impresión como MiTiendita** (modo Navegador): `PrintOrderView.vue` (cuenta y comanda) y `PrintCashCloseView.vue` (corte) rehechos con barra de herramientas (Cerrar, papel 80/58, Imprimir), papel con toldo, barra negra, talón, total invertido, sello y despedida manuscrita. Salen de `ticket.css`, `ticketShell.js`, `components/TicketHeader.vue` y `storeTime.js` (copiados y adaptados de MiTiendita). El ancho de papel es el mismo de Ajustes → Impresora. Fuente Caveat añadida en `index.html`. No se portaron el código de barras, el QR de factura ni los cortes X por segmentos.
+- Nota: el modo «puerto COM» no ve el puerto virtual «EPSON COM Emulation» (Epson TM-T88V); para esa impresora sirve el modo Navegador con `--kiosk-printing`.
+
+- **Diseño propio de restaurante** (ya no el de tienda de MiTiendita): servicio de mesa (tenedor, plato, cuchillo) en el encabezado, círculo con mesa o turno, «Su orden» como carta, total con doble línea, propina con renglones, «¡Buen provecho!». Igual en la vista del navegador (`TicketHeader.vue`, bloque `rt-*` de `ticket.css`, `PrintOrderView.vue`) y en la imagen de la térmica (`ticketImage.js`).
+- **Prueba real en Epson TM-T88V:** la imagen a 576 puntos salía cortada del lado derecho; esa impresora imprime 512 puntos útiles. Ahora el ancho de 80 mm es configurable (`dots80`, 512 por defecto) y la imagen quedó compacta (≈930 filas, ≈60 KB frente a ≈1300 filas y ≈93 KB). La impresión por imagen sigue siendo más lenta que la de texto: subir la velocidad del puerto (115200) y/o usar «Texto sencillo».
+- **Navegador:** Opera no lista el puerto virtual «EPSON COM Emulation»; Edge sí. Un `Uint8Array` es obligatorio para Web Serial (error corregido en `rasterBytes`).
+
+- **Ajustes → Impresora con botón «Guardar cambios»:** los cambios se editan en un borrador (`pd` en `SettingsView.vue`); la barra inferior muestra «Tienes cambios sin guardar», luego «✓ Cambios guardados en este dispositivo». Conectar, probar y abrir cajón se bloquean mientras haya cambios sin guardar. También hay «Probar ancho» (regla de 384–576 puntos), ancho 480/512/576 e intensidad Clara/Normal/Oscura.
+- **Aviso:** el servidor de desarrollo de Vite puede servir un módulo viejo si dos ediciones seguidas del mismo archivo se pisan (pasó con `printing.js`: `paperDots is not defined`); si algo falla solo en `npm run dev`, tocar el archivo o reiniciar el servidor. Si el diseño en imagen no se puede dibujar, la cuenta sale en texto y la app avisa con el motivo.
+
 ## Límites
 - La estación de impresión remota (cola) no se portó. La vista de impresión del navegador conserva el diseño de texto anterior.
 - La impresión directa no se probó con hardware real.

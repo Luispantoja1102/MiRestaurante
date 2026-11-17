@@ -317,7 +317,7 @@ export function rasterBytes(width, height, rgba, { openDrawer = false, threshold
   out.push(0x1b, 0x64, 0x04);
   if (openDrawer) out.push(0x1b, 0x70, 0x00, 0x19, 0xfa);
   out.push(0x1d, 0x56, 0x42, 0x00);
-  return out;
+  return Uint8Array.from(out); // el puerto serie y el USB piden un búfer, no una lista
 }
 
 export function buildTestPage({ cols = 42, shop = "MiRestaurante", openDrawer = false } = {}) {

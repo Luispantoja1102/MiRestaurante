@@ -29,12 +29,14 @@ function readSettings() {
       drawer: Boolean(raw.drawer),
       autoPrint: raw.autoPrint !== false, // imprimir el ticket al cobrar
       ticketStyle: raw.ticketStyle === "text" ? "text" : "image", // la cuenta: diseño en imagen o texto simple
+      dots80: [480, 576].includes(raw.dots80) ? raw.dots80 : 512,
+      ink: ["light", "dark"].includes(raw.ink) ? raw.ink : "normal", // intensidad del ticket en imagen // puntos útiles en papel de 80 mm: Epson TM-T88 y similares imprimen 512, otras 576
       baudRate: Number(raw.baudRate) || 9600,
       deviceName: String(raw.deviceName || ""),
       portInfo: raw.portInfo && typeof raw.portInfo === "object" ? raw.portInfo : null,
     };
   } catch {
-    return { mode: "browser", paper: "80", drawer: false, autoPrint: true, ticketStyle: "image", baudRate: 9600, deviceName: "", portInfo: null };
+    return { mode: "browser", paper: "80", drawer: false, autoPrint: true, ticketStyle: "image", dots80: 512, ink: "normal", baudRate: 9600, deviceName: "", portInfo: null };
   }
 }
 
@@ -54,6 +56,8 @@ export function savePrinterSettings(patch = {}) {
         drawer: printerStore.drawer,
         autoPrint: printerStore.autoPrint,
         ticketStyle: printerStore.ticketStyle,
+        dots80: printerStore.dots80,
+        ink: printerStore.ink,
         baudRate: printerStore.baudRate,
         deviceName: printerStore.deviceName,
         portInfo: printerStore.portInfo,
@@ -430,3 +434,9 @@ export function openCashDrawer() {
 }
 
 export const paperCols = cols;
+
+/** Ancho en puntos de la imagen del ticket: 384 en 58 mm; en 80 mm, el útil de la impresora (512 o 576). */
+/** Punto de corte a blanco y negro: más alto = trazos más llenos y oscuros. */
+export const inkThreshold = () => ({ light: 160, normal: 190, dark: 215 })[printerStore.ink] || 190;
+
+export const paperDots = () => (printerStore.paper === "58" ? 384 : printerStore.dots80);

@@ -1,10 +1,12 @@
 // Cuenta con diseño de restaurante dibujada como imagen (canvas): se manda a la térmica como imagen blanco y negro.
 // Usa los mismos datos que el ticket de texto (orderTicketData). Solo corre en el navegador.
+// Se dibuja compacta: una imagen más corta se transmite y se imprime más rápido.
 import { money, rasterBytes } from "./escpos";
 
-const SERIF = '"Georgia","Times New Roman",serif';
-const SANS = '"Segoe UI","Helvetica Neue",Arial,sans-serif';
-const BASE = 576; // puntos de una térmica de 80 mm; la de 58 mm (384) escala todo
+const DISPLAY = '"Bricolage Grotesque","Georgia","Times New Roman",serif';
+const HAND = '"Caveat","Segoe Print","Bradley Hand",cursive';
+const SANS = '"Figtree","Segoe UI","Helvetica Neue",Arial,sans-serif';
+const BASE = 512; // puntos útiles de una térmica de 80 mm (72 mm de impresión); todo se escala a partir de aquí
 
 function loadImage(url) {
   return new Promise((resolve) => {
@@ -55,32 +57,48 @@ function ditheredLogo(img, maxW, maxH) {
   return c;
 }
 
+async function loadFonts() {
+  try {
+    await Promise.all([
+      document.fonts.load('800 30px "Bricolage Grotesque"'),
+      document.fonts.load('700 30px "Caveat"'),
+      document.fonts.load('600 16px "Figtree"'),
+      document.fonts.load('800 16px "Figtree"'),
+    ]);
+  } catch {
+    /* sin tipografías de internet se usan las del sistema */
+  }
+}
+
 /**
  * Dibuja la cuenta. `t` = orderTicketData(...). Devuelve un canvas con el alto justo.
- * @param {{width?: number, logoUrl?: string}} opts width: 576 (80 mm) o 384 (58 mm)
+ * @param {{width?: number, logoUrl?: string}} opts width: puntos de ancho (512 = 80 mm estándar, 576 = 80 mm completo, 384 = 58 mm)
  */
 export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {}) {
   const k = width / BASE;
   const S = (n) => Math.round(n * k);
-  const logo = await loadImage(logoUrl);
+  const [logo] = await Promise.all([loadImage(logoUrl), loadFonts()]);
 
   const c = document.createElement("canvas");
   c.width = width;
-  c.height = S(1800 + t.items.length * 260 + (t.notes ? 220 : 0));
+  c.height = S(1500 + t.items.length * 220 + (t.notes ? 200 : 0));
   const g = c.getContext("2d");
   g.fillStyle = "#fff";
   g.fillRect(0, 0, c.width, c.height);
   g.fillStyle = "#000";
   g.strokeStyle = "#000";
 
-  const M = S(22);
-  const L = M;
-  const R = width - M;
+  const L = S(16);
+  const R = width - S(16);
   const inner = R - L;
-  let y = S(18);
+  const mid = width / 2;
+  let y = S(10);
 
+  // En papel térmico las líneas finas se pierden: un peso más y letras no menores a 12 puntos
+  const HEAVIER = { 400: 600, 500: 600, 600: 700, 700: 800 };
   const font = (size, weight = "400", family = SANS, style = "") => {
-    g.font = `${style} ${weight} ${S(size)}px ${family}`.trim();
+    const w = family === SANS ? HEAVIER[weight] || weight : weight;
+    g.font = `${style} ${w} ${S(Math.max(size, 12))}px ${family}`.trim();
   };
   const spacing = (px) => {
     if ("letterSpacing" in g) g.letterSpacing = `${S(px)}px`;
@@ -100,33 +118,33 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
     if (cur) lines.push(cur);
     return lines.length ? lines : [""];
   };
-  const center = (text, size, weight, family, style, gap = 1.3, space = 0) => {
+  const center = (text, size, weight, family, style, gap = 1.25, space = 0) => {
     font(size, weight, family, style);
     spacing(space);
     g.textAlign = "center";
     for (const line of wrapLines(text, inner)) {
-      g.fillText(line, width / 2 + (space ? S(space) / 2 : 0), y + S(size));
+      g.fillText(line, mid + (space ? S(space) / 2 : 0), y + S(size));
       y += S(size * gap);
     }
     spacing(0);
   };
-  const left = (text, size, weight = "400", style = "", x = L, maxW = inner) => {
-    font(size, weight, SANS, style);
+  const left = (text, size, weight = "400", style = "", x = L, maxW = inner, family = SANS) => {
+    font(size, weight, family, style);
     g.textAlign = "left";
     for (const line of wrapLines(text, maxW)) {
       g.fillText(line, x, y + S(size));
-      y += S(size * 1.3);
+      y += S(size * 1.25);
     }
   };
-  const lr = (a, b, size, weight = "400", family = SANS) => {
-    font(size, weight, family);
+  const lr = (a, b, size, weight = "400") => {
+    font(size, weight);
     g.textAlign = "left";
     g.fillText(a, L, y + S(size));
     g.textAlign = "right";
     g.fillText(b, R, y + S(size));
-    y += S(size * 1.45);
+    y += S(size * 1.4);
   };
-  const dashed = (gap = 8) => {
+  const dashed = (gap = 6) => {
     g.save();
     g.lineWidth = S(2);
     g.setLineDash([S(6), S(5)]);
@@ -137,25 +155,6 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
     g.restore();
     y += S(gap * 2);
   };
-  const ornament = () => {
-    const mid = width / 2;
-    g.lineWidth = S(2);
-    g.beginPath();
-    g.moveTo(L, y + S(10));
-    g.lineTo(mid - S(26), y + S(10));
-    g.moveTo(mid + S(26), y + S(10));
-    g.lineTo(R, y + S(10));
-    g.stroke();
-    // un rombo en el centro, como remate
-    g.beginPath();
-    g.moveTo(mid, y + S(1));
-    g.lineTo(mid + S(9), y + S(10));
-    g.lineTo(mid, y + S(19));
-    g.lineTo(mid - S(9), y + S(10));
-    g.closePath();
-    g.fill();
-    y += S(26);
-  };
   const roundRect = (x, yy, w, h, r) => {
     g.beginPath();
     g.moveTo(x + r, yy);
@@ -165,233 +164,313 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
     g.arcTo(x, yy, x + w, yy, r);
     g.closePath();
   };
+  const doubleRule = (yy) => {
+    g.lineWidth = S(2);
+    g.beginPath();
+    g.moveTo(L, yy);
+    g.lineTo(R, yy);
+    g.moveTo(L, yy + S(5));
+    g.lineTo(R, yy + S(5));
+    g.stroke();
+  };
+  // Título de sección con una línea a cada lado
+  const section = (text) => {
+    font(12, "800");
+    spacing(3);
+    const w = g.measureText(text).width;
+    spacing(0);
+    const yc = y + S(8);
+    g.lineWidth = S(1.5);
+    g.beginPath();
+    g.moveTo(L, yc);
+    g.lineTo(mid - w / 2 - S(8), yc);
+    g.moveTo(mid + w / 2 + S(8), yc);
+    g.lineTo(R, yc);
+    g.stroke();
+    spacing(3);
+    g.textAlign = "center";
+    g.fillText(text, mid + S(1.5), y + S(13));
+    spacing(0);
+    y += S(24);
+  };
+
+  // Servicio de mesa: tenedor, plato y cuchillo con una línea a cada lado
+  const tableSetting = () => {
+    const yc = y + S(17);
+    g.lineWidth = S(2);
+    g.beginPath();
+    g.moveTo(L, yc);
+    g.lineTo(mid - S(74), yc);
+    g.moveTo(mid + S(74), yc);
+    g.lineTo(R, yc);
+    g.stroke();
+    // plato
+    g.lineWidth = S(2.2);
+    g.beginPath();
+    g.arc(mid, yc, S(16), 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.arc(mid, yc, S(9.5), 0, Math.PI * 2);
+    g.stroke();
+    // tenedor
+    const fx = mid - S(46);
+    g.lineWidth = S(2.4);
+    g.lineCap = "round";
+    g.beginPath();
+    for (const dx of [-6, 0, 6]) {
+      g.moveTo(fx + S(dx), yc - S(16));
+      g.lineTo(fx + S(dx), yc - S(4));
+    }
+    g.moveTo(fx - S(6), yc - S(4));
+    g.arc(fx, yc - S(4), S(6), Math.PI, 0, true);
+    g.moveTo(fx, yc + S(2));
+    g.lineTo(fx, yc + S(17));
+    g.stroke();
+    // cuchillo
+    const kx = mid + S(46);
+    g.beginPath();
+    g.moveTo(kx - S(3), yc + S(17));
+    g.lineTo(kx - S(3), yc - S(16));
+    g.bezierCurveTo(kx + S(9), yc - S(12), kx + S(10), yc - S(2), kx + S(6), yc + S(4));
+    g.lineTo(kx - S(3), yc + S(4));
+    g.closePath();
+    g.fill();
+    g.beginPath();
+    g.moveTo(kx - S(3), yc + S(4));
+    g.lineTo(kx - S(3), yc + S(17));
+    g.stroke();
+    g.lineCap = "butt";
+    y += S(40);
+  };
+
+  const get = (label) => t.info.find(([l]) => l === label)?.[1];
 
   // ——— Encabezado ———
   if (logo) {
     try {
-      const l = ditheredLogo(logo, S(190), S(150));
+      const l = ditheredLogo(logo, S(170), S(110));
       g.drawImage(l, Math.round((width - l.width) / 2), y);
-      y += l.height + S(10);
+      y += l.height + S(8);
     } catch {
       /* logo de otro origen o ilegible: se imprime sin él */
     }
   }
-  center(String(t.shop).toUpperCase(), 40, "700", SERIF);
-  center(t.kind, 15, "600", SANS, "", 1.5, 5);
-  if (t.address) center(t.address, 17, "400");
-  if (t.phone) center(`Tel. ${t.phone}`, 17, "400");
-  y += S(8);
-  ornament();
+  tableSetting();
+  center(String(t.shop).toUpperCase(), 34, "800", DISPLAY, "", 1.1);
+  center(`✦  ${t.kind}  ✦`, 12, "800", SANS, "", 1.5, 3);
+  if (t.address) center(t.address, 14, "400");
+  if (t.phone) center(`Tel. ${t.phone}`, 14, "400");
+  y += S(6);
 
-  // ——— Título y mesa ———
-  g.fillStyle = "#000";
-  const bh = S(46);
-  roundRect(L + S(70), y, inner - S(140), bh, S(23));
-  g.fill();
-  g.fillStyle = "#fff";
-  font(24, "700", SANS);
-  spacing(4);
-  g.textAlign = "center";
-  g.fillText("CUENTA", width / 2 + S(2), y + S(32));
-  spacing(0);
-  g.fillStyle = "#000";
-  y += bh + S(14);
+  // ——— Título ———
+  {
+    font(17, "900");
+    spacing(6);
+    const w = g.measureText("CUENTA").width;
+    spacing(0);
+    const yc = y + S(11);
+    g.lineWidth = S(1.5);
+    for (const dy of [-2.5, 2.5]) {
+      g.beginPath();
+      g.moveTo(L, yc + S(dy));
+      g.lineTo(mid - w / 2 - S(10), yc + S(dy));
+      g.moveTo(mid + w / 2 + S(10), yc + S(dy));
+      g.lineTo(R, yc + S(dy));
+      g.stroke();
+    }
+    spacing(6);
+    g.textAlign = "center";
+    g.fillText("CUENTA", mid + S(3), y + S(17));
+    spacing(0);
+    y += S(30);
+  }
 
-  const table = t.info.find(([label]) => label === "Mesa" || label === "Atención");
-  if (table) {
+  // ——— Mesa (o turno) en un círculo, con la fecha al lado ———
+  {
+    const counter = Boolean(get("Atención"));
+    const badgeTop = counter ? "TURNO" : "MESA";
+    const badgeMain = counter ? String(get("Turno") || "").replace("#", "") || "—" : String(get("Mesa") || "").replace(/^MESA\s*/i, "") || "—";
+    const who = counter ? get("Atención") : get("Servicio");
+    const stamp = get("Cobro") || get("Apertura") || "";
+    const r = S(40);
+    const cx = L + r + S(4);
+    const cy = y + r + S(2);
     g.lineWidth = S(3);
-    roundRect(L, y, inner, S(64), S(10));
+    g.beginPath();
+    g.arc(cx, cy, r, 0, Math.PI * 2);
     g.stroke();
-    // «MESA 4»: el nombre ya dice mesa, no se repite la etiqueta
-    const redundant = String(table[1]).startsWith(table[0].toUpperCase());
-    if (!redundant) {
-      font(15, "600");
-      g.textAlign = "left";
-      g.fillText(table[0].toUpperCase(), L + S(14), y + S(24));
-    }
-    font(32, "700", SERIF);
+    g.lineWidth = S(1.5);
+    g.beginPath();
+    g.arc(cx, cy, r + S(4.5), 0, Math.PI * 2);
+    g.stroke();
+    font(11, "800");
+    spacing(2.5);
     g.textAlign = "center";
-    g.fillText(String(table[1]), width / 2, y + S(redundant ? 43 : 48));
-    const turno = t.info.find(([label]) => label === "Turno");
-    if (turno) {
-      font(22, "700");
-      g.textAlign = "right";
-      g.fillText(String(turno[1]), R - S(14), y + S(40));
+    g.fillText(badgeTop, cx + S(1.2), cy - S(15));
+    spacing(0);
+    if (badgeMain.length > 3) {
+      font(20, "800", DISPLAY);
+      g.fillText(badgeMain.slice(0, 7), cx, cy + S(14));
+    } else {
+      font(38, "800", DISPLAY);
+      g.fillText(badgeMain, cx, cy + S(20));
     }
-    y += S(64) + S(12);
-  }
-
-  // ——— Datos del servicio (en dos columnas) ———
-  const rest = t.info.filter((r) => r !== table && r[0] !== "Turno" && r[0] !== "Artículos");
-  const colW = Math.floor(inner / 2) - S(6);
-  for (let i = 0; i < rest.length; i += 2) {
+    const tx = cx + r + S(18);
+    const maxW = R - tx;
     const startY = y;
-    let h = 0;
-    for (let j = 0; j < 2 && rest[i + j]; j++) {
-      y = startY;
-      const [label, value] = rest[i + j];
-      const x = L + j * (colW + S(12));
-      font(13, "600");
-      g.textAlign = "left";
-      g.fillText(String(label).toUpperCase(), x, y + S(13));
-      y += S(17);
-      left(String(value), 17, "600", "", x, colW);
-      h = Math.max(h, y - startY);
+    y = startY + S(4);
+    if (who) left(String(who), 20, "900", "", tx, maxW);
+    if (stamp) {
+      const [d, hm] = stamp.split(" ");
+      left(d || stamp, 16, "600", "", tx, maxW);
+      if (hm) left(hm, 17, "800", "", tx, maxW);
     }
-    y = startY + h + S(6);
+    const cashier = get("Atendió");
+    if (cashier) left(`Atendió ${cashier}`, 13, "400", "", tx, maxW);
+    y = Math.max(y, cy + r + S(10));
   }
-  y += S(2);
-  dashed();
 
-  // ——— Consumo ———
-  font(13, "700");
-  spacing(2);
-  g.textAlign = "left";
-  g.fillText("CONSUMO", L, y + S(13));
-  g.textAlign = "right";
-  g.fillText("IMPORTE", R, y + S(13));
-  spacing(0);
-  y += S(24);
+  // Los demás datos del servicio (origen, entrega…)
+  const SHOWN = new Set(["Mesa", "Atención", "Turno", "Servicio", "Apertura", "Cobro", "Atendió", "Artículos"]);
+  for (const [label, value] of t.info.filter(([l]) => !SHOWN.has(l))) lr(label, String(value), 15, "600");
+  y += S(4);
 
+  // ——— Su orden ———
+  section("SU ORDEN");
   for (const item of t.items) {
-    const boxW = S(56);
     const startY = y;
-    g.lineWidth = S(2.5);
-    roundRect(L, y + S(2), boxW, S(38), S(8));
-    g.stroke();
-    font(22, "700");
-    g.textAlign = "center";
-    g.fillText(`${item.qty}×`, L + boxW / 2, y + S(30));
-    const nameX = L + boxW + S(14);
-    const amountW = S(110);
-    font(21, "700");
+    font(26, "800", DISPLAY);
+    g.textAlign = "left";
+    g.fillText(`${item.qty}×`, L, y + S(24));
+    const nameX = L + S(50);
+    font(20, "800");
     g.textAlign = "right";
-    g.fillText(money(item.amount), R, y + S(21)); // misma línea que el nombre
+    g.fillText(money(item.amount), R, y + S(21));
+    const amountW = g.measureText(money(item.amount)).width + S(10);
     y = startY;
-    left(item.name, 21, "700", "", nameX, R - nameX - amountW);
-    y = Math.max(y, startY + S(40));
-    if (item.qty > 1) left(`${money(item.unit)} c/u`, 15, "400", "", nameX);
-    for (const o of item.options) {
-      left(`+ ${o.label} ×${o.qty}${o.amount > 0 ? `  (${money(o.amount)})` : ""}`, 16, "400", "", nameX, R - nameX);
-    }
-    if (item.notes) left(`“${item.notes}”`, 16, "400", "italic", nameX, R - nameX);
-    y += S(10);
+    left(item.name, 20, "800", "", nameX, R - nameX - amountW);
+    y = Math.max(y, startY + S(28));
+    if (item.qty > 1) left(`${money(item.unit)} c/u`, 14, "400", "", nameX);
+    for (const o of item.options) left(`+ ${o.label} ×${o.qty}${o.amount > 0 ? `  (${money(o.amount)})` : ""}`, 14, "400", "", nameX, R - nameX);
+    if (item.notes) left(`“${item.notes}”`, 14, "400", "italic", nameX, R - nameX);
+    y += S(6);
   }
-  dashed();
+  dashed(5);
 
   // ——— Totales ———
-  lr("Subtotal", money(t.subtotal), 19);
-  if (t.tax) lr(t.taxLabel.replace("I.V.A.", "IVA"), money(t.tax), 19);
-  if (t.deliveryFee) lr("Envío", money(t.deliveryFee), 19);
+  lr("Subtotal", money(t.subtotal), 16);
+  if (t.tax) lr(t.taxLabel.replace("I.V.A.", "IVA"), money(t.tax), 16);
+  if (t.deliveryFee) lr("Envío", money(t.deliveryFee), 16);
   y += S(6);
-  g.lineWidth = S(4);
-  roundRect(L, y, inner, S(66), S(10));
-  g.stroke();
-  g.lineWidth = S(1.5);
-  roundRect(L + S(6), y + S(6), inner - S(12), S(54), S(7));
-  g.stroke();
-  font(22, "700", SANS);
-  spacing(3);
+  doubleRule(y);
+  y += S(12);
+  font(18, "900");
+  spacing(5);
   g.textAlign = "left";
-  g.fillText("TOTAL", L + S(20), y + S(43));
+  g.fillText("TOTAL", L, y + S(30));
   spacing(0);
-  font(36, "700", SERIF);
+  font(36, "800", DISPLAY);
   g.textAlign = "right";
-  g.fillText(money(t.total), R - S(20), y + S(47));
-  y += S(66) + S(18);
+  g.fillText(money(t.total), R, y + S(33));
+  y += S(46);
+  doubleRule(y);
+  y += S(18);
 
-  // ——— Propina sugerida ———
-  if (t.tips.length) {
-    center("Propina sugerida", 18, "700", SERIF, "italic", 1.4);
-    y += S(2);
-    const gap = S(10);
+  // ——— Propina sugerida y renglones a mano ———
+  if (t.tips.length && !t.paid) {
+    section("PROPINA SUGERIDA");
+    const gap = S(8);
     const w = Math.floor((inner - gap * (t.tips.length - 1)) / t.tips.length);
     t.tips.forEach(([label, amount], i) => {
       const x = L + i * (w + gap);
       g.lineWidth = S(2);
-      roundRect(x, y, w, S(62), S(9));
+      roundRect(x, y, w, S(50), S(8));
       g.stroke();
-      font(15, "600");
+      font(12, "700");
       g.textAlign = "center";
-      g.fillText(label, x + w / 2, y + S(21));
-      font(19, "700");
-      g.fillText(money(amount), x + w / 2, y + S(48));
+      g.fillText(label, x + w / 2, y + S(18));
+      font(17, "800");
+      g.fillText(money(amount), x + w / 2, y + S(40));
     });
-    y += S(62) + S(14);
-    font(17, "400");
-    g.textAlign = "left";
-    g.fillText("Propina: $", L, y + S(17));
-    g.lineWidth = S(1.5);
-    g.beginPath();
-    g.moveTo(L + S(100), y + S(19));
-    g.lineTo(R, y + S(19));
-    g.stroke();
-    y += S(36);
+    y += S(60);
+    for (const text of ["Propina $", "Total con propina $"]) {
+      font(15, "700");
+      g.textAlign = "left";
+      g.fillText(text, L, y + S(18));
+      const w2 = g.measureText(text).width;
+      g.lineWidth = S(1.5);
+      g.beginPath();
+      g.moveTo(L + w2 + S(8), y + S(20));
+      g.lineTo(R, y + S(20));
+      g.stroke();
+      y += S(30);
+    }
+    y += S(2);
   }
 
-  // ——— Estado del pago ———
+  // ——— Pago ———
   if (t.paid) {
-    lr(t.methodText, money(t.total), 19, "600");
+    lr(t.methodText, money(t.total), 17, "700");
     if (t.received != null) {
-      lr("Recibido", money(t.received), 18);
-      lr("Cambio", money(t.change), 18);
+      lr("Recibido", money(t.received), 16);
+      lr("Cambio", money(t.change), 16, "700");
     }
-    // sello «PAGADO» ligeramente girado
+    y += S(4);
+  }
+  // Sello: PAGADO (girado) o recuadro punteado si falta cobrar
+  if (t.paid) {
     g.save();
-    g.translate(width / 2, y + S(42));
-    g.rotate(-0.07);
-    g.lineWidth = S(4);
-    roundRect(-S(110), -S(30), S(220), S(60), S(8));
+    g.translate(mid, y + S(30));
+    g.rotate(-0.06);
+    g.lineWidth = S(3.5);
+    roundRect(-S(88), -S(23), S(176), S(46), S(8));
     g.stroke();
-    font(34, "700", SANS);
-    spacing(5);
+    font(28, "900");
+    spacing(4);
     g.textAlign = "center";
-    g.fillText("PAGADO", S(2), S(12));
+    g.fillText("PAGADO", S(2), S(10));
     spacing(0);
     g.restore();
-    y += S(96);
+    y += S(68);
   } else {
     g.save();
-    g.lineWidth = S(3);
-    g.setLineDash([S(10), S(7)]);
-    roundRect(L, y, inner, S(58), S(8));
+    g.lineWidth = S(2.5);
+    g.setLineDash([S(9), S(6)]);
+    roundRect(L, y, inner, S(44), S(8));
     g.stroke();
     g.restore();
-    font(20, "700");
+    font(17, "800");
     spacing(2);
     g.textAlign = "center";
-    g.fillText("PENDIENTE DE PAGO", width / 2, y + S(37));
+    g.fillText("PENDIENTE DE PAGO", mid + S(1), y + S(29));
     spacing(0);
-    y += S(58) + S(16);
+    y += S(56);
   }
 
   if (t.notes) {
-    dashed();
-    left(`Observaciones: ${t.notes}`, 17, "400", "italic");
-    y += S(4);
+    left(`Observaciones: ${t.notes}`, 14, "400", "italic");
+    y += S(2);
   }
 
   // ——— Despedida ———
-  y += S(6);
-  ornament();
-  center("¡Gracias por su visita!", 30, "700", SERIF, "italic", 1.3);
-  center("Buen provecho · Le esperamos pronto", 17, "400");
-  y += S(8);
-  center("Este comprobante no es factura fiscal. Solicite factura en caja si aplica.", 13, "400", SANS, "", 1.35);
-  center(`Folio ${t.folio}`, 13, "600");
-  y += S(6);
+  center("¡Buen provecho!", 38, "700", HAND, "", 1.05);
+  center("Gracias por su visita · Le esperamos pronto", 14, "700");
+  y += S(4);
+  center("Este comprobante no es factura fiscal. Solicite factura en caja si aplica.", 11, "400", SANS, "", 1.3);
+  center(`Folio ${t.folio}`, 11, "700");
+  y += S(2);
 
   // Borde de ticket recortado
   g.beginPath();
   g.moveTo(0, y);
-  const tooth = S(14);
+  const tooth = S(12);
   for (let x = 0; x < width; x += tooth) {
-    g.lineTo(x + tooth / 2, y + S(8));
+    g.lineTo(x + tooth / 2, y + S(7));
     g.lineTo(x + tooth, y);
   }
   g.lineWidth = S(2);
   g.stroke();
-  y += S(16);
+  y += S(12);
 
   const out = document.createElement("canvas");
   out.width = width;
@@ -400,9 +479,48 @@ export async function renderReceiptImage(t, { width = BASE, logoUrl = "" } = {})
   return out;
 }
 
+/**
+ * Regla para saber cuántos puntos imprime de verdad una impresora: líneas verticales marcadas con su número.
+ * La última línea que sale completa en el papel es el ancho útil.
+ */
+export function widthTestBytes() {
+  const width = 576;
+  const marks = [384, 416, 448, 480, 512, 544, 576];
+  const c = document.createElement("canvas");
+  c.width = width;
+  c.height = 300;
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, width, c.height);
+  g.fillStyle = "#000";
+  g.strokeStyle = "#000";
+  g.font = `700 20px ${SANS}`;
+  g.textAlign = "left";
+  g.fillText("PRUEBA DE ANCHO", 8, 28);
+  g.font = `400 14px ${SANS}`;
+  g.fillText("La última línea que veas completa", 8, 50);
+  g.fillText("en el papel es el ancho de tu impresora.", 8, 68);
+  marks.forEach((m, i) => {
+    const x = m - 2;
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(x, 80 + (i % 2) * 14);
+    g.lineTo(x, 280);
+    g.stroke();
+    g.font = `700 16px ${SANS}`;
+    g.textAlign = "right";
+    g.fillText(String(m), x - 4, 100 + (i % 2) * 14 + 14);
+  });
+  g.lineWidth = 3;
+  g.strokeRect(2, 82, width - 4, 198);
+  const { data } = g.getImageData(0, 0, width, c.height);
+  return rasterBytes(width, c.height, data);
+}
+
 /** Bytes ESC/POS de la cuenta dibujada. */
-export async function receiptImageBytes(t, { width = BASE, logoUrl = "", openDrawer = false } = {}) {
+export async function receiptImageBytes(t, { width = BASE, logoUrl = "", openDrawer = false, threshold = 190 } = {}) {
   const canvas = await renderReceiptImage(t, { width, logoUrl });
   const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
-  return rasterBytes(canvas.width, canvas.height, data, { openDrawer });
+  // threshold más alto = más negro: los bordes grises de las letras también se imprimen
+  return rasterBytes(canvas.width, canvas.height, data, { openDrawer, threshold });
 }

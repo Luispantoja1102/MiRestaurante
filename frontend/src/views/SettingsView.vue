@@ -215,14 +215,14 @@
         <template v-else-if="section === 'impresora'">
           <section class="panel pr-card">
             <h3>Cómo sale el ticket</h3>
-            <p class="hint">Se guarda solo en este dispositivo: cada caja elige su impresora. No necesita «Guardar cambios».</p>
+            <p class="hint">Se guarda solo en este dispositivo: cada caja elige su impresora. Al terminar, pulsa «Guardar cambios».</p>
             <div class="pr-choices">
               <button
                 v-for="m in PRINTER_MODES"
                 :key="m.id"
                 type="button"
                 class="pr-choice"
-                :aria-pressed="printerStore.mode === m.id"
+                :aria-pressed="pd.mode === m.id"
                 :disabled="m.id !== 'browser' && !printerSupport()[m.id]"
                 @click="setPrinterMode(m.id)"
               >
@@ -232,56 +232,87 @@
             </div>
           </section>
 
-          <section v-if="printerStore.mode !== 'browser'" class="panel pr-card">
+          <section v-if="pd.mode !== 'browser'" class="panel pr-card">
             <h3>Impresora térmica</h3>
             <p class="pr-state" :class="printerStore.connected ? 'on' : printerStore.lost ? 'lost' : 'off'" role="status"><i></i>{{ printerLine }}</p>
             <div class="pr-choices">
-              <button type="button" class="pr-choice" :aria-pressed="printerStore.paper === '80'" @click="savePrinterSettings({ paper: '80' })">
+              <button type="button" class="pr-choice" :aria-pressed="pd.paper === '80'" @click="pd.paper = '80'">
                 <strong>Papel 80 mm</strong><small>42 letras por renglón</small>
               </button>
-              <button type="button" class="pr-choice" :aria-pressed="printerStore.paper === '58'" @click="savePrinterSettings({ paper: '58' })">
+              <button type="button" class="pr-choice" :aria-pressed="pd.paper === '58'" @click="pd.paper = '58'">
                 <strong>Papel 58 mm</strong><small>32 letras por renglón</small>
               </button>
             </div>
-            <label v-if="printerStore.mode === 'serial'" class="field">
+            <label v-if="pd.paper === '80'" class="field">
+              <span>Ancho de impresión</span>
+              <select :value="pd.dots80" @change="pd.dots80 = Number($event.target.value)">
+                <option :value="480">Ajustado · 480 puntos</option>
+                <option :value="512">Estándar · 512 puntos (Epson TM-T88 y similares)</option>
+                <option :value="576">Completo · 576 puntos</option>
+              </select>
+              <small class="hint">Si el ticket sale cortado del lado derecho, baja el ancho. «Probar ancho» imprime una regla: la última línea que salga completa te dice cuál usar.</small>
+            </label>
+            <label v-if="pd.mode === 'serial'" class="field">
               <span>Velocidad del puerto</span>
-              <select :value="printerStore.baudRate" @change="savePrinterSettings({ baudRate: Number($event.target.value) })">
+              <select :value="pd.baudRate" @change="pd.baudRate = Number($event.target.value)">
                 <option v-for="b in [9600, 19200, 38400, 57600, 115200]" :key="b" :value="b">{{ b }}</option>
               </select>
+              <small class="hint">Si imprime lento, sube la velocidad (115200 suele funcionar). Después de cambiarla pulsa «Cambiar impresora».</small>
             </label>
             <div class="pr-acts">
-              <button type="button" class="btn-primary" :disabled="printerStore.busy" @click="choosePrinter">{{ printerStore.deviceName ? "Cambiar impresora" : "Elegir impresora" }}</button>
-              <button type="button" class="pr-btn" :disabled="printerStore.busy || !printerStore.connected" @click="testPrint">{{ printerStore.busy ? "Imprimiendo…" : "Imprimir prueba" }}</button>
-              <button type="button" class="pr-btn" :disabled="printerStore.busy || !printerStore.connected" @click="pulseDrawer">Abrir cajón</button>
+              <button type="button" class="btn-primary" :disabled="printerStore.busy || printerDirty" @click="choosePrinter">{{ printerStore.deviceName ? "Cambiar impresora" : "Elegir impresora" }}</button>
+              <button type="button" class="pr-btn" :disabled="printerStore.busy || printerDirty || !printerStore.connected" @click="testPrint">{{ printerStore.busy ? "Imprimiendo…" : "Imprimir prueba" }}</button>
+              <button type="button" class="pr-btn" :disabled="printerStore.busy || printerDirty || !printerStore.connected" @click="testWidth">Probar ancho</button>
+              <button type="button" class="pr-btn" :disabled="printerStore.busy || printerDirty || !printerStore.connected" @click="pulseDrawer">Abrir cajón</button>
             </div>
             <p v-if="printerErr" class="err" role="alert">{{ printerErr }}</p>
           </section>
 
-          <section v-if="printerStore.mode !== 'browser'" class="panel pr-card">
+          <section v-if="pd.mode !== 'browser'" class="panel pr-card">
             <h3>Diseño de la cuenta</h3>
             <div class="pr-choices">
-              <button type="button" class="pr-choice" :aria-pressed="printerStore.ticketStyle === 'image'" @click="savePrinterSettings({ ticketStyle: 'image' })">
+              <button type="button" class="pr-choice" :aria-pressed="pd.ticketStyle === 'image'" @click="pd.ticketStyle = 'image'">
                 <strong>Con diseño de restaurante</strong><small>Logo, mesa y total enmarcados, sello de pagado.</small>
               </button>
-              <button type="button" class="pr-choice" :aria-pressed="printerStore.ticketStyle === 'text'" @click="savePrinterSettings({ ticketStyle: 'text' })">
-                <strong>Texto sencillo</strong><small>Sale más rápido en impresoras lentas.</small>
+              <button type="button" class="pr-choice" :aria-pressed="pd.ticketStyle === 'text'" @click="pd.ticketStyle = 'text'">
+                <strong>Texto sencillo</strong><small>Sale mucho más rápido: úsalo en horas de mucho servicio.</small>
               </button>
             </div>
+            <label v-if="pd.ticketStyle === 'image'" class="field">
+              <span>Intensidad del diseño</span>
+              <select :value="pd.ink" @change="pd.ink = $event.target.value">
+                <option value="light">Clara</option>
+                <option value="normal">Normal</option>
+                <option value="dark">Oscura (letras más llenas)</option>
+              </select>
+              <small class="hint">Si las letras pequeñas salen muy claras, usa «Oscura».</small>
+            </label>
             <div class="pr-switch-row">
               <div>
                 <h3>Imprimir el ticket al cobrar</h3>
                 <p class="hint">Al terminar de cobrar sale la cuenta sola. Si lo apagas, te pregunta cada vez.</p>
               </div>
-              <button type="button" role="switch" class="pr-switch" :aria-checked="printerStore.autoPrint" aria-label="Imprimir el ticket al cobrar" @click="savePrinterSettings({ autoPrint: !printerStore.autoPrint })"></button>
+              <button type="button" role="switch" class="pr-switch" :aria-checked="pd.autoPrint" aria-label="Imprimir el ticket al cobrar" @click="pd.autoPrint = !pd.autoPrint"></button>
             </div>
             <div class="pr-switch-row">
               <div>
                 <h3>Abrir el cajón al cobrar en efectivo</h3>
                 <p class="hint">Manda el pulso al cajón conectado a la impresora (conector RJ11).</p>
               </div>
-              <button type="button" role="switch" class="pr-switch" :aria-checked="printerStore.drawer" aria-label="Abrir el cajón al cobrar en efectivo" @click="savePrinterSettings({ drawer: !printerStore.drawer })"></button>
+              <button type="button" role="switch" class="pr-switch" :aria-checked="pd.drawer" aria-label="Abrir el cajón al cobrar en efectivo" @click="pd.drawer = !pd.drawer"></button>
             </div>
           </section>
+
+          <!-- Guardado explícito: se ve si hay cambios pendientes y cuándo ya quedaron -->
+          <div class="pr-save" :class="{ dirty: printerDirty, done: printerFlash && !printerDirty }">
+            <p role="status">
+              <template v-if="printerDirty">Tienes cambios sin guardar</template>
+              <template v-else-if="printerFlash">✓ Cambios guardados en este dispositivo</template>
+              <template v-else>Todo guardado</template>
+            </p>
+            <button v-if="printerDirty" type="button" class="pr-btn" @click="discardPrinter">Descartar</button>
+            <button type="button" class="btn-primary" :disabled="!printerDirty" @click="savePrinter">Guardar cambios</button>
+          </div>
         </template>
 
         <!-- Apariencia -->
@@ -333,6 +364,7 @@ import LogoPicker from "../components/LogoPicker.vue";
 import { themeStore, applyUiTheme } from "../themeStore";
 import { inviteStatusLabel, labelOf, roleLabel } from "../labels";
 import { ROLE_DEFS, focusFor, focusInfo } from "../roles";
+import { printWidthTest } from "../printing";
 import { connectPrinter, openCashDrawer, printTestPage, printerStore, printerSupport, savePrinterSettings } from "../thermalPrinter";
 
 const router = useRouter();
@@ -562,9 +594,27 @@ const printerLine = computed(() => {
   if (printerStore.error) return `Elegida: ${name}. No se pudo conectar: ${printerStore.error}`;
   return `Elegida: ${name} (se conecta al imprimir)`;
 });
+// Los cambios se editan en un borrador y se guardan con el botón «Guardar cambios»
+const PRINTER_KEYS = ["mode", "paper", "dots80", "ink", "ticketStyle", "autoPrint", "drawer", "baudRate"];
+const printerSaved = () => Object.fromEntries(PRINTER_KEYS.map((k) => [k, printerStore[k]]));
+const pd = reactive(printerSaved());
+const printerDirty = computed(() => PRINTER_KEYS.some((k) => pd[k] !== printerStore[k]));
+const printerFlash = ref(false);
+let flashTimer = null;
 function setPrinterMode(mode) {
   printerErr.value = "";
-  savePrinterSettings({ mode, deviceName: mode === printerStore.mode ? printerStore.deviceName : "" });
+  pd.mode = mode;
+}
+function savePrinter() {
+  const modeChanged = pd.mode !== printerStore.mode;
+  // Al cambiar de modo se olvida la impresora elegida: era de otro tipo de conexión
+  savePrinterSettings({ ...pd, ...(modeChanged ? { deviceName: "" } : {}) });
+  printerFlash.value = true;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => (printerFlash.value = false), 3500);
+}
+function discardPrinter() {
+  Object.assign(pd, printerSaved());
 }
 async function printerJob(job, ok) {
   printerErr.value = "";
@@ -578,6 +628,7 @@ async function printerJob(job, ok) {
 }
 const choosePrinter = () => printerJob(() => connectPrinter({ prompt: true }), "Impresora lista.");
 const testPrint = () => printerJob(() => printTestPage(), "Prueba enviada a la impresora.");
+const testWidth = () => printerJob(() => printWidthTest(), "Se imprimió la regla: la última línea completa es el ancho de tu impresora.");
 const pulseDrawer = () => printerJob(() => openCashDrawer(), "Se mandó el pulso al cajón.");
 
 // ——— Terminal de cobro (Mercado Pago Point) ———
@@ -807,6 +858,11 @@ input, select { border: 1px solid var(--mirestaurante-line); border-radius: 0.65
 .pr-acts { display: flex; flex-wrap: wrap; gap: 0.6rem; }
 .pr-btn { min-height: 2.5rem; padding: 0 1rem; border-radius: 0.7rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-surface); color: var(--mirestaurante-ink); font: inherit; font-weight: 700; cursor: pointer; }
 .pr-btn:disabled { opacity: 0.55; cursor: default; }
+.pr-save { position: sticky; bottom: 0.6rem; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.6rem; padding: 0.7rem 0.9rem; border: 1.5px solid var(--mirestaurante-line); border-radius: 1rem; background: var(--mirestaurante-panel); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); }
+.pr-save p { margin: 0 auto 0 0; font-size: 0.9rem; font-weight: 700; color: var(--mirestaurante-muted); }
+.pr-save.dirty { border-color: var(--mirestaurante-warning, #e8a020); }
+.pr-save.dirty p { color: var(--mirestaurante-warning, #e8a020); }
+.pr-save.done p { color: var(--mirestaurante-success); }
 .pr-switch-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .pr-switch-row h3 { margin-bottom: 0.2rem; }
 .pr-switch { position: relative; flex: none; width: 3rem; height: 1.75rem; border-radius: 999px; border: none; background: var(--mirestaurante-line); cursor: pointer; transition: background 0.15s; }

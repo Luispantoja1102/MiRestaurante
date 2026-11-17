@@ -1,83 +1,141 @@
 <template>
-  <div class="wrap">
-    <button type="button" class="no-print" @click="print">Imprimir ticket</button>
+  <div class="tk-view">
+    <div class="tk-bar">
+      <button type="button" class="tk-btn" title="Cerrar (Esc)" @click="close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+        Cerrar
+      </button>
+      <div class="tk-bar-title">
+        <strong>{{ session ? `Corte de caja #${folio}` : "Corte de caja" }}</strong>
+        <small v-if="session">{{ verdict.title }} · {{ shortDate(session.closedAt || session.openedAt) }}</small>
+      </div>
+      <div class="tk-seg" role="group" aria-label="Ancho del papel">
+        <button type="button" :aria-pressed="paper === '80'" @click="setPaper('80')">80<span class="tk-mm"> mm</span></button>
+        <button type="button" :aria-pressed="paper === '58'" @click="setPaper('58')">58<span class="tk-mm"> mm</span></button>
+      </div>
+      <button type="button" class="tk-btn primary tk-print" :disabled="!session" @click="print">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V4h10v5" /><path d="M7 17H5a1 1 0 01-1-1v-5a2 2 0 012-2h12a2 2 0 012 2v5a1 1 0 01-1 1h-2" /><path d="M7 14h10v6H7z" /></svg>
+        Imprimir
+      </button>
+    </div>
 
-    <div class="ticket">
-      <p v-if="loading" class="center">Cargando…</p>
-      <p v-else-if="err" class="center err">{{ err }}</p>
+    <div class="tk-stage">
+      <div class="tk-sheet">
+        <article class="tk-paper" :class="{ w58: paper === '58' }">
+          <p v-if="loading" class="tk-state">Cargando corte…</p>
+          <p v-else-if="err" class="tk-state err">{{ err }}</p>
 
-      <template v-else-if="session">
-        <div class="center head">
-          <p class="shop">{{ businessName }}</p>
-          <p class="subtype">{{ typeLabel }}</p>
-          <p v-if="address" class="muted">{{ address }}</p>
-          <p v-if="phone" class="muted">TEL: {{ phone }}</p>
-        </div>
+          <template v-else-if="session">
+            <TicketHeader />
 
-        <p class="sep">================================</p>
-        <p class="center banner">CORTE DE CAJA</p>
-        <p class="sep">================================</p>
+            <div class="tk-band">
+              <span>Corte de caja</span>
+              <small>{{ closed ? "Z · Final" : "X · Parcial" }}</small>
+            </div>
 
-        <p>SESION......: {{ shortId(session.id) }}</p>
-        <p>ABRIO.......: {{ (session.openedBy || '—').toUpperCase() }}</p>
-        <p>HORA APERT..: {{ formatDate(session.openedAt) }}</p>
-        <template v-if="session.closedAt">
-          <p>CERRO.......: {{ (session.closedBy || '—').toUpperCase() }}</p>
-          <p>HORA CIERRE.: {{ formatDate(session.closedAt) }}</p>
-        </template>
-        <p>TICKETS.....: {{ orders.length }}</p>
+            <div class="tk-stub">
+              <div>
+                <span>Turno</span>
+                <strong class="tk-mono">Nº {{ folio }}</strong>
+              </div>
+              <div>
+                <span>{{ dayName(session.openedAt) }}</span>
+                <p class="tk-stub-date">{{ shortDate(session.openedAt) }}</p>
+              </div>
+            </div>
 
-        <p class="sep">--------------------------------</p>
-        <p class="center section">*** RESUMEN DE VENTAS ***</p>
+            <!-- Línea de tiempo del turno -->
+            <div class="cc-shift">
+              <div>
+                <span>Abrió</span>
+                <strong>{{ clock(session.openedAt) }}</strong>
+                <em>{{ session.openedBy || "—" }}</em>
+              </div>
+              <div class="cc-track" aria-hidden="true">
+                <i></i>
+                <small>{{ duration }}</small>
+              </div>
+              <div class="r">
+                <span>{{ closed ? "Cerró" : "Corte" }}</span>
+                <strong>{{ clock(session.closedAt || printedAt) }}</strong>
+                <em>{{ closed ? session.closedBy || "—" : "Caja abierta" }}</em>
+              </div>
+            </div>
 
-        <div class="row"><span>FONDO INICIAL</span><span>$ {{ moneyPlain(session.openingFloat) }}</span></div>
-        <div class="row">
-          <span>VENTAS EFECTIVO</span>
-          <span>$ {{ moneyPlain((session.expectedCash || 0) - (session.openingFloat || 0)) }}</span>
-        </div>
-        <div class="row"><span>VENTAS TARJETA</span><span>$ {{ moneyPlain(session.expectedCard) }}</span></div>
-        <div class="row"><span>TRANSFERENCIA</span><span>$ {{ moneyPlain(session.expectedTransfer) }}</span></div>
-        <div class="row"><span>PLATAFORMAS</span><span>$ {{ moneyPlain(session.expectedPlatform) }}</span></div>
-        <div class="row"><span>OTROS</span><span>$ {{ moneyPlain(session.expectedOther) }}</span></div>
+            <div class="cc-kpis">
+              <div><strong>{{ paidOrders.length }}</strong><span>Ventas</span></div>
+              <div><strong>{{ articles }}</strong><span>Artículos</span></div>
+              <div><strong>{{ moneyShort(average) }}</strong><span>Promedio</span></div>
+            </div>
 
-        <p class="sep">--------------------------------</p>
-        <div class="row"><span>TOTAL VENTAS</span><span>$ {{ moneyPlain(session.expectedTotal) }}</span></div>
-        <div class="row"><span>EF. ESPERADO</span><span>$ {{ moneyPlain(session.expectedCash) }}</span></div>
-        <div class="row"><span>EF. CONTADO</span><span>$ {{ moneyPlain(session.countedCash) }}</span></div>
+            <p class="tk-sec">Ventas por forma de pago</p>
+            <div class="cc-methods">
+              <div v-for="m in methods" :key="m.key" class="cc-method">
+                <div class="tk-line">
+                  <span>{{ m.label }}</span><i class="tk-dots"></i><span>{{ money(m.amount) }}</span>
+                </div>
+                <div class="cc-bar" aria-hidden="true"><i :style="{ width: `${m.share}%` }"></i></div>
+              </div>
+            </div>
 
-        <p class="sep">================================</p>
-        <div class="row total">
-          <span>DIFERENCIA</span>
-          <span>$ {{ moneyPlain(session.difference) }}</span>
-        </div>
-        <p class="sep">================================</p>
+            <div class="tk-total">
+              <span>Vendido</span>
+              <strong><sup>$</sup>{{ num(totalSold) }}</strong>
+            </div>
+            <div class="cc-after">
+              <div class="tk-line">
+                <span>IVA incluido</span><i class="tk-dots"></i><span>{{ money(taxCollected) }}</span>
+              </div>
+              <div v-if="voided.length" class="tk-line">
+                <span>Canceladas ({{ voided.length }})</span><i class="tk-dots"></i><span>{{ money(voidedTotal) }}</span>
+              </div>
+            </div>
 
-        <template v-if="orders.length">
-          <p class="center section">*** DETALLE DE TICKETS ***</p>
-          <div class="cols hdr">
-            <span>MESA</span>
-            <span>PAGO</span>
-            <span class="r">TOTAL</span>
-          </div>
-          <p class="sep thin">--------------------------------</p>
-          <div v-for="o in orders" :key="o.id" class="cols line">
-            <span>{{ truncate(o.tableName || 'S/M', 8) }}</span>
-            <span>{{ payShort(o.paymentMethod) }}</span>
-            <span class="r">{{ moneyPlain(o.total) }}</span>
-          </div>
-          <p class="sep">--------------------------------</p>
-        </template>
+            <!-- Cuadre del cajón, como cuenta hecha a mano -->
+            <p class="tk-sec">Cuadre del cajón</p>
+            <div class="cc-sum">
+              <div class="cc-row"><i></i><span>Fondo inicial</span><b>{{ money(opening) }}</b></div>
+              <div class="cc-row"><i>+</i><span>Ventas en efectivo</span><b>{{ money(cashSales) }}</b></div>
+              <div class="cc-row eq"><i>=</i><span>Debe haber</span><b>{{ money(expectedCash) }}</b></div>
+              <div v-if="closed" class="cc-row counted"><i></i><span>Se contó</span><b>{{ money(session.countedCash) }}</b></div>
+            </div>
 
-        <template v-if="session.notes">
-          <p class="note">OBS: {{ session.notes }}</p>
-          <p class="sep">--------------------------------</p>
-        </template>
+            <div class="tk-stamp-row">
+              <div class="tk-stamp" :class="{ solid: verdict.solid }">
+                <b>{{ verdict.word }}</b>
+                <small>{{ verdict.sub }}</small>
+              </div>
+            </div>
 
-        <p class="center thanks">FIN DE CORTE DE CAJA</p>
-        <p class="center muted">Conserve este comprobante</p>
-        <p class="center tiny">{{ businessName }}</p>
-        <p class="center tiny">Powered by MiRestaurante POS</p>
-      </template>
+            <div v-if="session.notes" class="cc-notes">
+              <span>Observaciones</span>
+              <p>{{ session.notes }}</p>
+            </div>
+
+            <template v-if="orders.length">
+              <p class="tk-sec">Tickets del turno · {{ orders.length }}</p>
+              <div class="cc-list">
+                <div v-for="o in orders" :key="o.id" class="cc-tk" :class="{ void: isVoid(o) }">
+                  <span>{{ clock(o.paidAt || o.createdAt) }}</span>
+                  <span class="tk-mono">#{{ folioOf(o.id) }}</span>
+                  <span>{{ isVoid(o) ? "CANC" : o.paymentStatus === "paid" ? methodShort(o.paymentMethod) : "PEND" }}</span>
+                  <b>{{ num(o.total) }}</b>
+                </div>
+              </div>
+            </template>
+
+            <div class="cc-sign">
+              <div><i></i><span>Entregó</span><em>{{ session.closedBy || session.openedBy || "" }}</em></div>
+              <div><i></i><span>Recibió</span><em>&nbsp;</em></div>
+            </div>
+
+            <p class="tk-note">Impreso {{ shortDate(printedAt) }} · {{ clock(printedAt) }}</p>
+            <div class="tk-foot">
+              <p class="tk-made">Hecho con <b>MiRestaurante</b></p>
+            </div>
+          </template>
+        </article>
+      </div>
     </div>
   </div>
 </template>
@@ -85,54 +143,97 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
+import "../ticket.css";
 import { apiService } from "../apiService";
 import { venueStore, fetchVenueSettings } from "../venueStore";
+import { storeClock, storeParts } from "../storeTime";
+import { useTicketShell, folioOf, dayLong, monthShort } from "../ticketShell";
+import TicketHeader from "../components/TicketHeader.vue";
 
 const route = useRoute();
+const { paper, setPaper, print, close } = useTicketShell("/orders");
+
 const session = ref(null);
 const orders = ref([]);
 const loading = ref(true);
 const err = ref("");
+const printedAt = new Date();
 
-const businessName = computed(() =>
-  (venueStore.businessName || "RESTAURANTE").toUpperCase()
-);
-const address = computed(() => venueStore.address || "");
-const phone = computed(() => venueStore.phone || "");
-const typeLabel = computed(() => {
-  const map = {
-    restaurant: "RESTAURANTE",
-    cafe: "CAFÉ",
-    bar: "BAR",
-    hotel: "HOTEL / RESTAURANTE",
-    other: "ESTABLECIMIENTO",
-  };
-  return map[venueStore.businessType] || "RESTAURANTE";
+const folio = computed(() => folioOf(session.value?.id));
+const closed = computed(() => Boolean(session.value?.closedAt) || session.value?.status === "closed");
+const isVoid = (o) => o.status === "cancelled" || o.paymentStatus === "refunded";
+const paidOrders = computed(() => orders.value.filter((o) => o.paymentStatus === "paid" && !isVoid(o)));
+const voided = computed(() => orders.value.filter(isVoid));
+const voidedTotal = computed(() => voided.value.reduce((s, o) => s + Number(o.total || 0), 0));
+
+// Con la caja abierta no hay totales guardados: se suman de los tickets cobrados
+const local = computed(() => {
+  const t = { cash: 0, card: 0, transfer: 0, platform: 0, other: 0, total: 0 };
+  for (const o of paidOrders.value) {
+    const amount = Number(o.total || 0);
+    t[t[o.paymentMethod] != null && o.paymentMethod !== "total" ? o.paymentMethod : "other"] += amount;
+    t.total += amount;
+  }
+  return t;
+});
+const saved = (field, fallback) => (closed.value && session.value?.[field] != null ? Number(session.value[field]) : fallback);
+
+const opening = computed(() => Number(session.value?.openingFloat || 0));
+const expectedCash = computed(() => saved("expectedCash", opening.value + local.value.cash));
+const cashSales = computed(() => expectedCash.value - opening.value);
+const totalSold = computed(() => saved("expectedTotal", local.value.total));
+
+const methods = computed(() => {
+  const list = [
+    { key: "cash", label: "Efectivo", amount: cashSales.value },
+    { key: "card", label: "Tarjeta", amount: saved("expectedCard", local.value.card) },
+    { key: "transfer", label: "Transferencia", amount: saved("expectedTransfer", local.value.transfer) },
+    { key: "platform", label: "Plataformas", amount: saved("expectedPlatform", local.value.platform) },
+    { key: "other", label: "Otros", amount: saved("expectedOther", local.value.other) },
+  ].filter((m) => m.key === "cash" || m.amount > 0);
+  const max = Math.max(...list.map((m) => m.amount), 0);
+  return list.map((m) => ({ ...m, share: max > 0 ? Math.max(2, Math.round((m.amount / max) * 100)) : 0 }));
 });
 
-const payMap = { cash: "EFEC", card: "TARJ", transfer: "TRANS", platform: "PLAT", other: "OTRO" };
+const articles = computed(() => paidOrders.value.reduce((s, o) => s + (o.items || []).reduce((a, i) => a + (Number(i.quantity) || 0), 0), 0));
+const average = computed(() => (paidOrders.value.length ? totalSold.value / paidOrders.value.length : 0));
+const taxCollected = computed(() => paidOrders.value.reduce((s, o) => s + Number(o.tax || 0), 0));
 
-function moneyPlain(n) {
-  return Number(n || 0).toFixed(2);
+const verdict = computed(() => {
+  if (!closed.value) return { word: "Parcial", sub: "Caja sigue abierta", title: "Corte parcial", solid: false };
+  const diff = Number(session.value?.difference || 0);
+  if (Math.abs(diff) < 0.005) return { word: "Cuadra", sub: "Al centavo", title: "Cuadró", solid: false };
+  if (diff < 0) return { word: "Faltan", sub: money(-diff), title: `Faltaron ${money(-diff)}`, solid: true };
+  return { word: "Sobran", sub: money(diff), title: `Sobraron ${money(diff)}`, solid: true };
+});
+
+const validDate = (d) => {
+  const dt = d ? new Date(d) : null;
+  return dt && !Number.isNaN(dt.getTime()) ? dt : null;
+};
+const duration = computed(() => {
+  const a = validDate(session.value?.openedAt);
+  const b = validDate(session.value?.closedAt) || printedAt;
+  if (!a) return "";
+  const mins = Math.max(0, Math.round((b - a) / 60000));
+  const h = Math.floor(mins / 60);
+  return h ? `${h} h ${String(mins % 60).padStart(2, "0")} min` : `${mins} min`;
+});
+
+const SHORT = { cash: "EFEC", card: "TARJ", transfer: "TRANSF", platform: "PLAT", other: "OTRO" };
+const methodShort = (m) => SHORT[m] || "—";
+const moneyFmt = new Intl.NumberFormat("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const num = (n) => moneyFmt.format(Number(n || 0));
+const money = (n) => `$${num(n)}`;
+const moneyShort = (n) => (Number(n) >= 1000 ? `$${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 }).format(Number(n))}` : money(n));
+function shortDate(d) {
+  const p = storeParts(d, venueStore.timezone);
+  return p ? `${String(p.day).padStart(2, "0")} ${monthShort(p.month)} ${p.year}` : "";
 }
-function formatDate(d) {
-  if (!d) return "";
-  const dt = new Date(d);
-  const p = (x) => String(x).padStart(2, "0");
-  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}/${dt.getFullYear()} ${p(dt.getHours())}:${p(dt.getMinutes())}`;
-}
-function truncate(s, n) {
-  const t = String(s || "");
-  return t.length > n ? `${t.slice(0, n - 1)}.` : t;
-}
-function shortId(id) {
-  return String(id || "").slice(-8).toUpperCase();
-}
-function payShort(m) {
-  return payMap[m] || "—";
-}
-function print() {
-  window.print();
+const clock = (d) => storeClock(d, venueStore.timezone) || "—";
+function dayName(d) {
+  const p = storeParts(d, venueStore.timezone);
+  return p ? dayLong(p.weekday) : "Fecha";
 }
 
 onMounted(async () => {
@@ -141,12 +242,13 @@ onMounted(async () => {
     const id = String(route.params.id);
     session.value = await apiService.getCashSessionById(id);
     const all = await apiService.getOrders();
-    orders.value = (all || []).filter((o) => o.cashSessionId === id);
-    if (route.query.autoprint === "1") {
-      setTimeout(() => window.print(), 400);
-    }
+    orders.value = (all || [])
+      .filter((o) => o.cashSessionId === id)
+      .sort((a, b) => new Date(a.paidAt || a.createdAt) - new Date(b.paidAt || b.createdAt));
+    if (route.query.autoprint === "1") setTimeout(() => window.print(), 400);
   } catch (e) {
-    err.value = e.response?.data || "No se pudo cargar el corte";
+    const msg = e?.response?.data;
+    err.value = typeof msg === "string" && msg ? msg : "No se pudo cargar el corte.";
   } finally {
     loading.value = false;
   }
@@ -154,115 +256,55 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.wrap {
-  min-height: 100vh;
-  background: #e8e8e8;
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-}
-.ticket {
-  width: 80mm;
-  max-width: 100%;
-  background: #fff;
-  color: #000;
-  padding: 4mm 3.5mm 8mm;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 11px;
-  line-height: 1.32;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.15);
-}
-.center { text-align: center; }
-.shop {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-}
-.subtype {
-  margin: 2px 0 4px;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-}
-.banner {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-.section {
-  margin: 4px 0;
-  font-weight: 700;
-}
-.sep {
-  margin: 5px 0;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.sep.thin { margin: 2px 0; }
-.muted { font-size: 10px; }
-.row {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.4rem;
-  font-variant-numeric: tabular-nums;
-}
-.total {
-  font-size: 13px;
-  font-weight: 700;
-}
-.cols {
-  display: grid;
-  grid-template-columns: 1fr 0.7fr 1fr;
-  gap: 0.2rem;
-  font-variant-numeric: tabular-nums;
-}
-.cols.hdr { font-weight: 700; font-size: 10px; }
-.cols.line { margin-bottom: 2px; }
-.r { text-align: right; }
-.note { margin: 0; font-size: 10px; }
-.thanks {
-  margin: 6px 0 2px;
-  font-size: 12px;
-  font-weight: 700;
-}
-.tiny { margin: 2px 0 0; font-size: 9px; }
-.err { color: #b42318; }
-p { margin: 0; }
+/* Turno: abrió ●━━━━● cerró */
+.cc-shift { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2mm; margin-top: 3mm; }
+.cc-shift > div:not(.cc-track) { display: grid; line-height: 1.15; }
+.cc-shift .r { text-align: right; }
+.cc-shift span { font-size: 0.72em; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+.cc-shift strong { font-size: 1.35em; font-weight: 900; }
+.cc-shift em { max-width: 22mm; overflow: hidden; font-size: 0.82em; font-style: normal; font-weight: 700; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.cc-track { position: relative; display: grid; justify-items: center; gap: 0.8mm; }
+.cc-track i { position: relative; width: 100%; height: 0; border-top: 2px solid #000; }
+.cc-track i::before,
+.cc-track i::after { content: ""; position: absolute; top: -1.3mm; width: 2.2mm; height: 2.2mm; border-radius: 50%; background: #000; transform: translateY(-1px); }
+.cc-track i::before { left: -0.4mm; }
+.cc-track i::after { right: -0.4mm; background: #fff; border: 2px solid #000; }
+.cc-track small { font-size: 0.8em; font-weight: 800; white-space: nowrap; }
 
-.no-print {
-  border: none;
-  background: #1b1814;
-  color: #fff;
-  border-radius: 0.55rem;
-  padding: 0.65rem 1rem;
-  font-weight: 700;
-  cursor: pointer;
-  font-family: var(--font-sans);
-}
+.cc-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 3mm; border: 1.5px solid #000; border-radius: 1.2mm; }
+.cc-kpis div { display: grid; justify-items: center; padding: 1.4mm 0.5mm; min-width: 0; }
+.cc-kpis div + div { border-left: 1.5px dashed #000; }
+.cc-kpis strong { max-width: 100%; overflow: hidden; font-size: 1.25em; font-weight: 900; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+.cc-kpis span { font-size: 0.68em; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
 
-@media print {
-  @page { size: 80mm auto; margin: 0; }
-  html, body {
-    margin: 0 !important;
-    padding: 0 !important;
-    background: #fff !important;
-  }
-  .wrap {
-    min-height: auto;
-    background: #fff;
-    padding: 0;
-    display: block;
-  }
-  .no-print { display: none !important; }
-  .ticket {
-    width: 72mm;
-    max-width: 72mm;
-    box-shadow: none;
-    padding: 2mm 2mm 10mm;
-    margin: 0 auto;
-  }
-}
+.cc-methods { display: grid; gap: 1.6mm; }
+.cc-bar { height: 2.2mm; margin-top: 0.6mm; border: 1.2px solid #000; border-radius: 0.6mm; }
+.cc-bar i { display: block; height: 100%; background: #000; }
+.cc-after { margin-top: 1.6mm; font-size: 0.92em; }
+
+/* Suma con signos a la izquierda y raya antes del resultado */
+.cc-sum { display: grid; gap: 0.8mm; }
+.cc-row { display: grid; grid-template-columns: 3.4mm minmax(0, 1fr) auto; align-items: baseline; gap: 1mm; }
+.cc-row i { font-style: normal; font-weight: 900; text-align: center; }
+.cc-row b { font-weight: 800; white-space: nowrap; }
+.cc-row.eq { margin-top: 0.6mm; padding-top: 1mm; border-top: 1.5px solid #000; font-size: 1.12em; font-weight: 900; }
+.cc-row.eq b { font-weight: 900; }
+.cc-row.counted { margin-top: 0.8mm; padding: 1mm 0; border-top: 1.5px dashed #000; border-bottom: 1.5px dashed #000; font-size: 1.12em; font-weight: 800; }
+
+.cc-notes { margin-top: 2.5mm; padding: 1.4mm 2mm; border-left: 3px solid #000; }
+.cc-notes span { font-size: 0.72em; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+.cc-notes p { font-family: "Caveat", "Segoe Print", cursive; font-size: 1.45em; line-height: 1.1; overflow-wrap: anywhere; }
+
+.cc-list { display: grid; font-size: 0.9em; }
+.cc-tk { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 2mm; padding: 0.5mm 0; }
+.cc-tk + .cc-tk { border-top: 1px dotted #000; }
+.cc-tk b { font-weight: 800; text-align: right; }
+.cc-tk.void b { text-decoration: line-through; }
+.cc-tk.void span:nth-child(3) { font-weight: 900; }
+
+.cc-sign { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4mm; margin-top: 9mm; }
+.cc-sign div { display: grid; justify-items: center; text-align: center; }
+.cc-sign i { width: 100%; border-top: 1.5px solid #000; margin-bottom: 0.6mm; }
+.cc-sign span { font-size: 0.72em; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase; }
+.cc-sign em { max-width: 100%; overflow: hidden; font-size: 0.82em; font-style: normal; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 </style>

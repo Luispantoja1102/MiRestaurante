@@ -7,8 +7,8 @@ import { venueStore } from "./venueStore";
 import { channelLabel, modalityLabel } from "./labels";
 import { buildCashClose, buildKitchen, buildReceipt } from "./escpos";
 import { cashTicketData, orderTicketData } from "./ticketData";
-import { receiptImageBytes } from "./ticketImage";
-import { directPrinting, paperCols, printBytes, printerStore } from "./thermalPrinter";
+import { receiptImageBytes, widthTestBytes } from "./ticketImage";
+import { directPrinting, inkThreshold, paperCols, paperDots, printBytes, printerStore } from "./thermalPrinter";
 
 const venue = () => ({
   shop: venueStore.businessName,
@@ -29,13 +29,15 @@ async function receiptBytes(t, cols, openDrawer) {
   if (printerStore.ticketStyle === "image") {
     try {
       const logoUrl = venueStore.logoUrl && venueStore.logoUrl !== "/logo.svg" ? venueStore.logoUrl : "";
-      return await receiptImageBytes(t, { width: cols === 32 ? 384 : 576, logoUrl, openDrawer });
+      return await receiptImageBytes(t, { width: paperDots(), logoUrl, openDrawer, threshold: inkThreshold() });
     } catch (e) {
       console.warn("[printing] ticket en imagen no disponible, se imprime en texto", e);
+      imageProblem = e?.message || String(e);
     }
   }
   return buildReceipt(t, { cols, openDrawer });
 }
+let imageProblem = ""; // por qué la cuenta salió en texto en vez de con diseño (para avisarlo, no esconderlo)
 
 function fallback(error, url) {
   if (window.confirm(`No se pudo imprimir en la térmica: ${error.message}\n\n¿Imprimir con el navegador?`)) window.open(url, "_blank");
@@ -59,7 +61,10 @@ export async function printOrder(orderOrId, kind = "receipt", { auto = false } =
     const cols = paperCols();
     // El cajón solo se abre con un cobro en efectivo
     const drawer = printerStore.drawer && kind === "receipt" && order.paymentStatus === "paid" && order.paymentMethod === "cash";
+    imageProblem = "";
     await printBytes(kind === "kitchen" ? buildKitchen(t, { cols }) : await receiptBytes(t, cols, drawer));
+    // Ya se imprimió (en texto): se avisa para que se sepa que falta el diseño y por qué
+    if (imageProblem) window.alert(`La cuenta salió en texto porque no se pudo dibujar el diseño:\n${imageProblem}`);
     return true;
   } catch (error) {
     return fallback(error, orderUrl(id, kind, true));
@@ -78,5 +83,8 @@ export async function printCashClose(sessionId) {
     return fallback(error, cashUrl(sessionId));
   }
 }
+
+/** Imprime la regla de ancho (Ajustes → Impresora → «Probar ancho»). */
+export const printWidthTest = () => printBytes(widthTestBytes());
 
 export { directPrinting };
