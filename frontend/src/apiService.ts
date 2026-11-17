@@ -361,6 +361,12 @@ export const apiService = {
   uberPublishMenu(open: string, close: string) {
     return axios.post('/integrations/uber/menu', { open, close }).then((r) => r.data);
   },
+  uberPricing(draft?: { plan: string; commissionPct: number; marketingPct: number; rounding: number }) {
+    return axios.get('/integrations/uber/pricing', { params: draft }).then((r) => r.data);
+  },
+  uberSetPricing(pricing: { enabled: boolean; plan: string; commissionPct: number; marketingPct: number; rounding: number }) {
+    return axios.put('/integrations/uber/pricing', pricing).then((r) => r.data);
+  },
   uberMetrics(days = 7) {
     return axios.get('/integrations/uber/metrics', { params: { days } }).then((r) => r.data);
   },

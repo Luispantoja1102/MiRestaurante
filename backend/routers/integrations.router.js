@@ -13,6 +13,8 @@ router.put('/uber/store', requireAuth, requireActiveSubscription, requireRoles('
 router.put('/uber/autopause', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberSetAutoPause);
 router.get('/uber/menu', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberMenuStatus);
 router.post('/uber/menu', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberPublishMenu);
+router.get('/uber/pricing', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberPricing);
+router.put('/uber/pricing', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberSetPricing);
 router.put('/uber/menu/auto', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberSetAutoPublish);
 router.get('/uber/prep', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberPrep);
 router.put('/uber/prep', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberSetPrep);

@@ -410,6 +410,29 @@ async function uberPublishMenu(req, res) {
   }
 }
 
+// —— Precios del menú en Uber Eats: subirlos lo que cobra Uber para conservar la ganancia
+async function uberPricing(req, res) {
+  try {
+    // Con `plan` en la dirección es una vista previa de lo que se está escribiendo (no se guarda)
+    return res.status(200).json(await uberMenu.pricingPreview(req.tenantId, req.query?.plan ? req.query : null));
+  } catch (err) {
+    if (err.status) return res.status(err.status).send(err.message);
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al leer los precios de Uber Eats');
+  }
+}
+
+async function uberSetPricing(req, res) {
+  try {
+    await uberMenu.setPricing(req.tenantId, req.body || {});
+    return res.status(200).json(await uberMenu.pricingPreview(req.tenantId));
+  } catch (err) {
+    if (err.status) return res.status(err.status).send(err.message);
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al guardar los precios de Uber Eats');
+  }
+}
+
 // —— Quitar la tienda de Uber por completo (pide autorizar de nuevo)
 async function uberRemove(req, res) {
   try {
@@ -490,4 +513,4 @@ async function uberSweep(req, res) {
   }
 }
 
-module.exports = { uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder };
+module.exports = { uberPricing, uberSetPricing, uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder };

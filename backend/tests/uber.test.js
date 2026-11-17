@@ -795,6 +795,43 @@ test('tiempo de preparación de la tienda: se lee de Uber y se cambia (la ruta d
   assert.deepEqual([down.json.prepMinutes, !!down.json.error], [20, true]);
 });
 
+test('precios para Uber: el menú sube lo que cobra Uber y en el local no cambia nada', async () => {
+  const { uberPrice } = require('../utils/uberPricing');
+  const foodPrice = state.foods.find((f) => f.id === 'f-latte').price;
+  const sent = () => JSON.parse(putMenus().pop().body).items.find((i) => i.id === 'f-latte').price_info.price;
+  const put = (body, token = admin()) => api.call('PUT', '/integrations/uber/pricing', { token, body });
+
+  assert.equal((await put({ enabled: true, plan: 'plus', rounding: 1 }, cashier())).status, 403, 'solo el administrador');
+  assert.equal((await put({ enabled: true, plan: 'rara' })).status, 400);
+  assert.equal((await put({ enabled: true, plan: 'custom', commissionPct: 80 })).status, 400);
+  assert.equal((await put({ enabled: true, plan: 'plus', rounding: 3 })).status, 400);
+
+  const before = putMenus().length;
+  const r = await put({ enabled: true, plan: 'plus', marketingPct: 0, rounding: 1 });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.cutPct, 31.32, '27 % + 16 % de IVA sobre la comisión');
+  await settle();
+  assert.equal(putMenus().length, before + 1, 'cambiar los precios vuelve a publicar el menú');
+  const esperado = uberPrice(foodPrice, { includesTax: true, taxRate: 0.08 }, { enabled: true, commissionPct: 27, marketingPct: 0, rounding: 1 });
+  assert.equal(sent(), esperado.price * 100);
+  assert.ok(esperado.price > foodPrice && esperado.net >= foodPrice, 'a ti te queda al menos lo mismo');
+  assert.equal(state.foods.find((f) => f.id === 'f-latte').price, foodPrice, 'el precio del local no se toca');
+
+  // la vista previa trae local, Uber y lo que te queda por platillo
+  const prev = await api.call('GET', '/integrations/uber/pricing', { token: admin() });
+  const row = prev.json.rows.find((x) => x.id === 'f-latte');
+  assert.deepEqual([row.local, row.uber, row.net], [foodPrice, esperado.gross, esperado.net]);
+
+  // el plan Premium con marketing cobra más; apagado vuelve al precio del menú
+  const premium = await put({ enabled: true, plan: 'premium', marketingPct: 5, rounding: 5 });
+  assert.equal(premium.json.cutPct, 38.64, '29 % × 1.16 + 5 %');
+  await settle();
+  assert.equal(sent() % 500, 0, 'redondeado hacia arriba a 5 pesos');
+  await put({ enabled: false, plan: 'plus', rounding: 1 });
+  await settle();
+  assert.equal(sent(), Math.round(foodPrice * 100), 'sin precios para Uber se publica el precio del menú');
+});
+
 test('sin credenciales de Uber el webhook responde 503', async () => {
   const id = process.env.UBER_EATS_CLIENT_ID;
   delete process.env.UBER_EATS_CLIENT_ID;

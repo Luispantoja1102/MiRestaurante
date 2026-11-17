@@ -108,3 +108,19 @@ test('el menú de Uber manda el IVA según la marca de cada platillo y la tasa d
   });
   assert.deepEqual(body.items.map((i) => i.tax_info), [{ vat_rate_percentage: 16 }, { tax_rate: 16 }]);
 });
+
+test('precio en Uber: sube lo que se queda Uber (plan Plus: $70 → $101.92, al peso $102)', () => {
+  const up = require('../utils/uberPricing');
+  const plus = { enabled: true, commissionPct: 27, marketingPct: 0, rounding: 0 };
+  assert.equal(up.uberCut(plus), 0.3132, '27 % × 1.16');
+  const exacto = up.uberPrice(70, { includesTax: true }, plus);
+  assert.deepEqual([exacto.gross, exacto.net], [101.92, 70]);
+  const alPeso = up.uberPrice(70, { includesTax: true }, { ...plus, rounding: 1 });
+  assert.deepEqual([alPeso.gross, alPeso.price, alPeso.net], [102, 102, 70.05]);
+  // sin IVA incluido: Uber suma el IVA, así que se publica la base y el cliente paga lo mismo
+  const aparte = up.uberPrice(70, { includesTax: false, taxRate: 0.08 }, { ...plus, rounding: 0 });
+  assert.equal(tax.round2(aparte.price * 1.08), aparte.gross);
+  // apagado: el precio del menú tal cual; un precio en cero se queda en cero
+  assert.equal(up.uberPrice(70, { includesTax: true }, { ...plus, enabled: false }).price, 70);
+  assert.equal(up.uberPrice(0, { includesTax: true }, plus).price, 0);
+});

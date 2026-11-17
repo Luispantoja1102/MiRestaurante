@@ -13,6 +13,7 @@ const db = require('../database/mongodb');
 const uber = require('./uber.service');
 const { extraItemId } = require('../models/uberIds');
 const { DEFAULT_TAX_RATE, rateOf, includesTax } = require('../utils/tax');
+const { PLANS, DEFAULT_PRICING, normalizePricing, uberCut, uberPrice } = require('../utils/uberPricing');
 
 const MENU_SCOPE = 'eats.store';
 const SUSPEND_HOURS = 24; // un agotado vence solo si no lo renovamos o reanudamos
@@ -43,7 +44,9 @@ function unavailableItemIds(foods, ingredientsById) {
 }
 
 /** Convierte el menú de MiRestaurante al formato de Uber. @returns { body, itemIds, outIds } */
-function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DEFAULT_TAX_RATE, now = Date.now() }) {
+function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DEFAULT_TAX_RATE, pricing = null, now = Date.now() }) {
+  // Con «precios para Uber» activos, cada precio sube lo que se queda Uber (ver utils/uberPricing.js)
+  const priced = (price, food) => uberPrice(price, { includesTax: includesTax(food.priceIncludesTax), taxRate }, pricing).price;
   // Precio con IVA incluido → `vat_rate_percentage`; precio sin IVA (se suma al cobrar) → `tax_rate`. ⚠️ confirmar en el sandbox.
   const pct = Math.round(rateOf(taxRate) * 10000) / 100;
   const taxInfo = (included) => (included ? { vat_rate_percentage: pct } : { tax_rate: pct });
@@ -67,7 +70,7 @@ function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DE
         title: text(f.name),
         ...(f.description ? { description: text(f.description) } : {}),
         ...(/^https:\/\//i.test(f.imgUrl || '') ? { image_url: f.imgUrl } : {}), // Uber solo acepta una dirección https
-        price_info: { price: cents(f.price) },
+        price_info: { price: cents(priced(f.price, f)) },
         tax_info: taxInfo(includesTax(f.priceIncludesTax)),
         external_data: String(f.id),
         ...(extras.length ? { modifier_group_ids: { ids: [groupId] } } : {}),
@@ -84,7 +87,7 @@ function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DE
         items.push({
           id: extraItemId(f, e),
           title: text(e.label),
-          price_info: { price: cents(e.price) },
+          price_info: { price: cents(priced(e.price, f)) },
           tax_info: taxInfo(includesTax(f.priceIncludesTax)), // el extra lleva la misma marca que su platillo
           quantity_info: { quantity: { min_permitted: 0, max_permitted: Number(e.max || 1) } },
           ...suspended(extraItemId(f, e)),
@@ -124,7 +127,7 @@ async function publishMenu(tenantId, hours = {}) {
   checkHours(open, close);
 
   const [foods, menus, ingredients, settings] = await Promise.all([db.GetFoods(tenantId), db.GetMenus(tenantId), db.GetIngredients(tenantId), db.GetSettings(tenantId)]);
-  const built = buildMenu({ foods, menus, ingredients, title: settings?.businessName, open, close, taxRate: settings?.taxRate });
+  const built = buildMenu({ foods, menus, ingredients, title: settings?.businessName, open, close, taxRate: settings?.taxRate, pricing: link.pricing });
   if (!built.body.items.length) throw httpError('Agrega productos a tus categorías antes de publicar el menú');
 
   try {
@@ -153,6 +156,34 @@ async function menuStatus(tenantId) {
     foods: foods.length,
     outOfStock: foods.filter((f) => out.has(String(f.id))).map((f) => f.name),
   };
+}
+
+/** Precios para Uber: la configuración guardada y, producto por producto, cuánto cuesta en el local, en Uber y cuánto te queda. */
+async function pricingPreview(tenantId, draft = null) {
+  const [link, foods, settings] = await Promise.all([db.GetIntegrationByTenant('uber', tenantId), db.GetFoods(tenantId), db.GetSettings(tenantId)]);
+  let pricing = { ...DEFAULT_PRICING, ...(link?.pricing || {}) };
+  if (draft) {
+    // Vista previa de lo que el negocio está escribiendo, sin guardarlo
+    const n = normalizePricing({ ...draft, enabled: true });
+    if (n.error) throw httpError(n.error);
+    pricing = { ...n.value, enabled: pricing.enabled };
+  }
+  const rows = foods.map((f) => {
+    const p = uberPrice(f.price, { includesTax: includesTax(f.priceIncludesTax), taxRate: settings?.taxRate }, { ...pricing, enabled: true });
+    return { id: String(f.id), name: f.name, local: p.base, uber: p.gross, net: p.net };
+  });
+  return { pricing, cutPct: Math.round(uberCut(pricing) * 10000) / 100, plans: PLANS, rows };
+}
+
+/** Guarda el plan y los precios de Uber; si el menú ya está publicado, se vuelve a subir con los precios nuevos. */
+async function setPricing(tenantId, input) {
+  const link = await db.GetIntegrationByTenant('uber', tenantId);
+  if (!link?.storeId) throw httpError('Vincula primero tu tienda de Uber Eats');
+  const { value, error } = normalizePricing(input);
+  if (error) throw httpError(error);
+  await db.SaveIntegration('uber', tenantId, { pricing: value });
+  await onMenuChanged(tenantId);
+  return value;
 }
 
 const suspensionBody = (until) => ({ suspension_info: { suspension: { suspend_until: until, reason: until ? 'Agotado' : null }, overrides: [] } });
@@ -256,4 +287,4 @@ async function onRefreshRequest(ev) {
   return { ...info, tenantId: link.tenantId, outcome: 'ok', detail: 'menú publicado de nuevo' };
 }
 
-module.exports = { buildMenu, unavailableItemIds, publishMenu, menuStatus, syncAvailability, onMenuChanged, republishIfDirty, onRefreshRequest, httpError };
+module.exports = { buildMenu, unavailableItemIds, publishMenu, menuStatus, pricingPreview, setPricing, syncAvailability, onMenuChanged, republishIfDirty, onRefreshRequest, httpError };

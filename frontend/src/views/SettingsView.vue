@@ -182,6 +182,7 @@
           </p>
 
           <UberStoreStatus v-if="uber.storeId" show-auto />
+          <UberPricing v-if="uber.storeId" />
           <UberMenu v-if="uber.storeId" />
           <UberMetrics v-if="uber.storeId" />
           <p v-if="uber.error" class="err" role="alert">{{ uber.error }}</p>
@@ -370,6 +371,7 @@ import FocusPicker from "../components/FocusPicker.vue";
 import UberStoreStatus from "../components/UberStoreStatus.vue";
 import UberMetrics from "../components/UberMetrics.vue";
 import UberMenu from "../components/UberMenu.vue";
+import UberPricing from "../components/UberPricing.vue";
 import UberConnect from "../components/UberConnect.vue";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
