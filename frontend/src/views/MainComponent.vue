@@ -241,6 +241,8 @@
                 <button v-if="canOrder" type="button" class="btn btn-soft btn-lg" @click="irAPedido">Agregar al pedido</button>
                 <p v-if="!canCharge" class="hint">Cuando pidan la cuenta, avisa en caja para cobrar {{ money(selInfo.total) }}.</p>
               </template>
+              <!-- La cuenta para llevar a la mesa, sin cobrar -->
+              <button v-if="selInfo.orders.length" type="button" class="btn btn-soft btn-lg" @click="imprimirCuenta">Imprimir cuenta</button>
             </div>
 
             <details class="more">
@@ -334,6 +336,7 @@ import { apiService } from '../apiService.ts';
 import { hasRole, canAccessRoute } from '../authStore';
 import { alertsState, myPhone, startWaiterAlerts, ackTable } from '../waiterAlerts';
 import { bindLive } from '../live';
+import { printOrder } from '../printing';
 
 const COLS = 12;
 const ROWS = 8;
@@ -831,6 +834,10 @@ function irAPedido() {
 
 function irACaja() {
   router.push('/orders');
+}
+
+async function imprimirCuenta() {
+  for (const o of selInfo.value.orders) await printOrder(o, 'receipt');
 }
 
 async function mostrarModalAgregarMesa() {

@@ -30,6 +30,12 @@
               <option v-for="b in [9600, 19200, 38400, 57600, 115200]" :key="b" :value="b">{{ b }}</option>
             </select>
           </label>
+          <label>Diseño de la cuenta
+            <select :value="p.ticketStyle" @change="save({ ticketStyle: $event.target.value })">
+              <option value="image">Con diseño de restaurante (imagen)</option>
+              <option value="text">Texto sencillo (más rápido)</option>
+            </select>
+          </label>
           <label class="check"><input type="checkbox" :checked="p.autoPrint" @change="save({ autoPrint: $event.target.checked })" /> Imprimir el ticket al cobrar</label>
           <label class="check"><input type="checkbox" :checked="p.drawer" @change="save({ drawer: $event.target.checked })" /> Abrir el cajón de dinero al cobrar en efectivo</label>
 

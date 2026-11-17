@@ -28,12 +28,13 @@ function readSettings() {
       paper: raw.paper === "58" ? "58" : "80",
       drawer: Boolean(raw.drawer),
       autoPrint: raw.autoPrint !== false, // imprimir el ticket al cobrar
+      ticketStyle: raw.ticketStyle === "text" ? "text" : "image", // la cuenta: diseño en imagen o texto simple
       baudRate: Number(raw.baudRate) || 9600,
       deviceName: String(raw.deviceName || ""),
       portInfo: raw.portInfo && typeof raw.portInfo === "object" ? raw.portInfo : null,
     };
   } catch {
-    return { mode: "browser", paper: "80", drawer: false, autoPrint: true, baudRate: 9600, deviceName: "", portInfo: null };
+    return { mode: "browser", paper: "80", drawer: false, autoPrint: true, ticketStyle: "image", baudRate: 9600, deviceName: "", portInfo: null };
   }
 }
 
@@ -52,6 +53,7 @@ export function savePrinterSettings(patch = {}) {
         paper: printerStore.paper,
         drawer: printerStore.drawer,
         autoPrint: printerStore.autoPrint,
+        ticketStyle: printerStore.ticketStyle,
         baudRate: printerStore.baudRate,
         deviceName: printerStore.deviceName,
         portInfo: printerStore.portInfo,

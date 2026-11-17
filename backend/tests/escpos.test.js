@@ -120,6 +120,23 @@ test('58 mm: ningún renglón pasa de 32 columnas', () => {
   for (const line of s.split('\n')) assert.ok(line.replace(/[\x00-\x1f]/g, '').length <= 32 + 8, `renglón corto: «${line.slice(0, 60)}»`);
 });
 
+test('ticket en imagen: bandas GS v 0, píxeles oscuros en negro, papel en blanco, y corte', () => {
+  // 10 × 3 px: la primera columna negra, el resto blanco; el último píxel transparente (= papel)
+  const w = 10, h = 3;
+  const rgba = new Uint8ClampedArray(w * h * 4).fill(255);
+  for (let y = 0; y < h; y++) { const i = y * w * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 0; }
+  rgba[(w * 1 + 9) * 4 + 3] = 0;
+  const b = esc.rasterBytes(w, h, rgba, { openDrawer: true });
+  assert.deepEqual(b.slice(0, 2), [0x1b, 0x40]);
+  assert.deepEqual(b.slice(2, 10), [0x1d, 0x76, 0x30, 0x00, 2, 0, 3, 0], '2 bytes por fila, 3 filas');
+  assert.deepEqual(b.slice(10, 16), [0x80, 0x00, 0x80, 0x00, 0x80, 0x00], 'solo la primera columna negra');
+  assert.ok(has(b, [0x1b, 0x70, 0x00]) && has(b, [0x1d, 0x56, 0x42]), 'cajón y corte');
+  assert.ok(!has(esc.rasterBytes(w, h, rgba), [0x1b, 0x70, 0x00]), 'sin cajón si no se pide');
+  // una imagen alta se parte en bandas de 200 filas
+  const tall = esc.rasterBytes(8, 450, new Uint8ClampedArray(8 * 450 * 4).fill(255));
+  assert.equal(Buffer.from(tall).toString('latin1').split('\x1dv0').length - 1, 3);
+});
+
 test('página de prueba con acentos y relleno', () => {
   const s = text(esc.buildTestPage({ cols: 42, shop: 'Café Prueba', openDrawer: true }));
   assert.ok(s.includes('PRUEBA') && s.includes('80 mm') && s.includes('$1,234.50'));

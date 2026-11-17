@@ -7,6 +7,7 @@ import { venueStore } from "./venueStore";
 import { channelLabel, modalityLabel } from "./labels";
 import { buildCashClose, buildKitchen, buildReceipt } from "./escpos";
 import { cashTicketData, orderTicketData } from "./ticketData";
+import { receiptImageBytes } from "./ticketImage";
 import { directPrinting, paperCols, printBytes, printerStore } from "./thermalPrinter";
 
 const venue = () => ({
@@ -22,6 +23,19 @@ const cashUrl = (id) => `/print/cash/${id}?autoprint=1`;
 
 /** ¿Hay que imprimir el ticket sin preguntar al cobrar? (térmica activa y esa opción encendida) */
 export const shouldAutoPrint = () => directPrinting() && printerStore.autoPrint;
+
+/** La cuenta con diseño (imagen); si no se puede dibujar, sale en texto para no perder el ticket. */
+async function receiptBytes(t, cols, openDrawer) {
+  if (printerStore.ticketStyle === "image") {
+    try {
+      const logoUrl = venueStore.logoUrl && venueStore.logoUrl !== "/logo.svg" ? venueStore.logoUrl : "";
+      return await receiptImageBytes(t, { width: cols === 32 ? 384 : 576, logoUrl, openDrawer });
+    } catch (e) {
+      console.warn("[printing] ticket en imagen no disponible, se imprime en texto", e);
+    }
+  }
+  return buildReceipt(t, { cols, openDrawer });
+}
 
 function fallback(error, url) {
   if (window.confirm(`No se pudo imprimir en la térmica: ${error.message}\n\n¿Imprimir con el navegador?`)) window.open(url, "_blank");
@@ -45,7 +59,7 @@ export async function printOrder(orderOrId, kind = "receipt", { auto = false } =
     const cols = paperCols();
     // El cajón solo se abre con un cobro en efectivo
     const drawer = printerStore.drawer && kind === "receipt" && order.paymentStatus === "paid" && order.paymentMethod === "cash";
-    await printBytes(kind === "kitchen" ? buildKitchen(t, { cols }) : buildReceipt(t, { cols, openDrawer: drawer }));
+    await printBytes(kind === "kitchen" ? buildKitchen(t, { cols }) : await receiptBytes(t, cols, drawer));
     return true;
   } catch (error) {
     return fallback(error, orderUrl(id, kind, true));

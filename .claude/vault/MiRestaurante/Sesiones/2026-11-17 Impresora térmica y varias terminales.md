@@ -11,8 +11,11 @@
   - La venta guarda `pointTerminal` (nombre de la terminal donde se cobró).
   - Frontend: Ajustes → Terminal de cobro (lista, renombrar, quitar, agregar); Caja y Mostrador muestran selector si hay más de una lista (recuerda la última por dispositivo).
 
+- **Cuenta con diseño de restaurante** (imagen): `ticketImage.js` dibuja la cuenta en canvas (logo tramado, mesa en recuadro, consumo con cantidades, total enmarcado, propina sugerida, sello PAGADO o «Pendiente de pago», borde recortado) y `rasterBytes` (`escpos.js`) la manda como GS v 0 en bandas de 200 filas. Ajuste `ticketStyle` (image por defecto | text) en Ajustes → Impresora; si el dibujo falla, sale en texto. Solo la cuenta: la comanda y el corte siguen en texto.
+- **Botón «Imprimir cuenta»** en la hoja de la mesa (`MainComponent.vue`): imprime la cuenta abierta sin cobrar.
+
 ## Límites
-- No se portó el ticket en imagen ni la estación de impresión remota (cola).
+- La estación de impresión remota (cola) no se portó. La vista de impresión del navegador conserva el diseño de texto anterior.
 - La impresión directa no se probó con hardware real.
 - `pointTerminal` se guarda pero aún no se muestra en el detalle del pedido.
 - Ver [[MiRestaurante/Sesiones/2026-11-16 Terminal Mercado Pago]] para el modelo de cobro.

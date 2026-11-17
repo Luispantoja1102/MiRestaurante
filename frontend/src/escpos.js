@@ -288,6 +288,38 @@ export function buildCashClose(t, { cols = 42 } = {}) {
   return p.build();
 }
 
+/**
+ * Ticket dibujado como imagen: convierte los píxeles RGBA (ImageData.data) a bandas de GS v 0 (blanco y negro).
+ * Lleva el cajón (si se pide), el avance y el corte, igual que los tickets de texto.
+ */
+export function rasterBytes(width, height, rgba, { openDrawer = false, threshold = 160 } = {}) {
+  const rowBytes = Math.ceil(width / 8);
+  const out = [0x1b, 0x40];
+  const BAND = 200; // filas por GS v 0: hay impresoras que no aceptan imágenes muy altas de una vez
+  for (let y0 = 0; y0 < height; y0 += BAND) {
+    const rows = Math.min(BAND, height - y0);
+    out.push(0x1d, 0x76, 0x30, 0x00, rowBytes & 0xff, rowBytes >> 8, rows & 0xff, rows >> 8);
+    for (let y = y0; y < y0 + rows; y++) {
+      for (let bx = 0; bx < rowBytes; bx++) {
+        let byte = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const x = bx * 8 + bit;
+          if (x >= width) continue;
+          const i = (y * width + x) * 4;
+          const a = rgba[i + 3] / 255; // lo transparente cuenta como papel
+          const lum = (0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]) * a + 255 * (1 - a);
+          if (lum < threshold) byte |= 0x80 >> bit;
+        }
+        out.push(byte);
+      }
+    }
+  }
+  out.push(0x1b, 0x64, 0x04);
+  if (openDrawer) out.push(0x1b, 0x70, 0x00, 0x19, 0xfa);
+  out.push(0x1d, 0x56, 0x42, 0x00);
+  return out;
+}
+
 export function buildTestPage({ cols = 42, shop = "MiRestaurante", openDrawer = false } = {}) {
   const p = new EscPos({ cols });
   p.init();
