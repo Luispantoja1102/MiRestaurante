@@ -424,7 +424,7 @@ async function uberPricing(req, res) {
 
 async function uberSetPricing(req, res) {
   try {
-    await uberMenu.setPricing(req.tenantId, req.body || {});
+    await uberMenu.setPricing(req.tenantId, req.body || {}, req.user?.username || req.user?.name || null);
     return res.status(200).json(await uberMenu.pricingPreview(req.tenantId));
   } catch (err) {
     if (err.status) return res.status(err.status).send(err.message);

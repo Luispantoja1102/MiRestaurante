@@ -806,10 +806,24 @@ test('precios para Uber: el menú sube lo que cobra Uber y en el local no cambia
   assert.equal((await put({ enabled: true, plan: 'custom', commissionPct: 80 })).status, 400);
   assert.equal((await put({ enabled: true, plan: 'plus', rounding: 3 })).status, 400);
 
+  // Uber no dice qué plan tiene el comercio: sin confirmarlo una persona, no se activa
+  const sinConfirmar = await put({ enabled: true, plan: 'plus', rounding: 1 });
+  assert.equal(sinConfirmar.status, 400);
+  assert.match(sinConfirmar.text, /Confirma que ese es el plan/);
+  assert.ok(!uberLinkDoc().pricing?.enabled, 'nada se guardó');
+  // Uber se quedaría más de la mitad: no se permite ni confirmando
+  const absurdo = await put({ enabled: true, plan: 'custom', commissionPct: 45, marketingPct: 10, rounding: 1, confirmed: true, confirmHigh: true });
+  assert.equal(absurdo.status, 400);
+  assert.match(absurdo.text, /más del doble/);
+
   const before = putMenus().length;
-  const r = await put({ enabled: true, plan: 'plus', marketingPct: 0, rounding: 1 });
+  const r = await put({ enabled: true, plan: 'plus', marketingPct: 0, rounding: 1, confirmed: true });
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.cutPct, 31.32, '27 % + 16 % de IVA sobre la comisión');
+  assert.equal(r.json.increasePct, 45.6, 'los precios en Uber suben ≈ 45.6 %');
+  assert.equal(r.json.highIncrease, false);
+  assert.equal(r.json.pricing.confirmedBy, 'ana', 'queda quién confirmó el plan');
+  assert.ok(r.json.pricing.confirmedAt);
   await settle();
   assert.equal(putMenus().length, before + 1, 'cambiar los precios vuelve a publicar el menú');
   const esperado = uberPrice(foodPrice, { includesTax: true, taxRate: 0.08 }, { enabled: true, commissionPct: 27, marketingPct: 0, rounding: 1 });
@@ -827,11 +841,19 @@ test('precios para Uber: el menú sube lo que cobra Uber y en el local no cambia
   assert.deepEqual([row.local, row.uber, row.net], [foodPrice, esperado.gross, esperado.net]);
 
   // el plan Premium con marketing cobra más; apagado vuelve al precio del menú
-  const premium = await put({ enabled: true, plan: 'premium', marketingPct: 5, rounding: 5 });
+  // con marketing el aumento es fuerte: pide una segunda confirmación
+  const sinEntender = await put({ enabled: true, plan: 'premium', marketingPct: 5, rounding: 5, confirmed: true });
+  assert.equal(sinEntender.status, 400);
+  assert.match(sinEntender.text, /subirían cerca de 63\.0?%|subirían cerca de 63%/);
+  const premium = await put({ enabled: true, plan: 'premium', marketingPct: 5, rounding: 5, confirmed: true, confirmHigh: true });
+  assert.equal(premium.status, 200, premium.text);
   assert.equal(premium.json.cutPct, 38.64, '29 % × 1.16 + 5 %');
+  assert.equal(premium.json.highIncrease, true);
   await settle();
   assert.equal(sent() % 500, 0, 'redondeado hacia arriba a 5 pesos');
-  await put({ enabled: false, plan: 'plus', rounding: 1 });
+  const apagar = await put({ enabled: false, plan: 'plus', rounding: 1 }); // apagar no pide confirmar
+  assert.equal(apagar.status, 200, apagar.text);
+  assert.equal(apagar.json.pricing.confirmedBy, 'ana', 'apagarlo no borra quién lo confirmó');
   await settle();
   assert.equal(sent(), Math.round(foodPrice * 100), 'sin precios para Uber se publica el precio del menú');
   assert.equal((await api.call('GET', '/integrations/uber/menu', { token: admin() })).json.pricing.enabled, false);

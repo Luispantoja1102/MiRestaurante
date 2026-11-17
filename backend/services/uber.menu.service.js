@@ -13,7 +13,7 @@ const db = require('../database/mongodb');
 const uber = require('./uber.service');
 const { extraItemId } = require('../models/uberIds');
 const { DEFAULT_TAX_RATE, rateOf, includesTax } = require('../utils/tax');
-const { PLANS, DEFAULT_PRICING, normalizePricing, uberCut, uberPrice } = require('../utils/uberPricing');
+const { PLANS, DEFAULT_PRICING, normalizePricing, uberCut, increasePct, isHighIncrease, uberPrice } = require('../utils/uberPricing');
 
 const MENU_SCOPE = 'eats.store';
 const SUSPEND_HOURS = 24; // un agotado vence solo si no lo renovamos o reanudamos
@@ -177,15 +177,33 @@ async function pricingPreview(tenantId, draft = null) {
     const p = uberPrice(f.price, { includesTax: includesTax(f.priceIncludesTax), taxRate: settings?.taxRate }, { ...pricing, enabled: true });
     return { id: String(f.id), name: f.name, local: p.base, uber: p.gross, net: p.net };
   });
-  return { pricing, cutPct: Math.round(uberCut(pricing) * 10000) / 100, plans: PLANS, rows };
+  return {
+    pricing,
+    cutPct: Math.round(uberCut(pricing) * 10000) / 100,
+    increasePct: increasePct(pricing), // cuánto suben los precios en Uber respecto al local
+    highIncrease: isHighIncrease(pricing), // aumento fuerte: pide una segunda confirmación al guardar
+    plans: PLANS,
+    rows,
+  };
 }
 
 /** Guarda el plan y los precios de Uber; si el menú ya está publicado, se vuelve a subir con los precios nuevos. */
-async function setPricing(tenantId, input) {
+async function setPricing(tenantId, input, by = null) {
   const link = await db.GetIntegrationByTenant('uber', tenantId);
   if (!link?.storeId) throw httpError('Vincula primero tu tienda de Uber Eats');
   const { value, error } = normalizePricing(input);
   if (error) throw httpError(error);
+  const prev = link.pricing || {};
+  if (value.enabled) {
+    // Uber no dice qué plan tiene cada comercio: lo confirma una persona y queda registrado quién y cuándo
+    if (input.confirmed !== true) throw httpError('Confirma que ese es el plan de tu contrato con Uber Eats');
+    if (isHighIncrease(value) && input.confirmHigh !== true) {
+      throw httpError(`Con esos porcentajes tus precios en Uber subirían cerca de ${increasePct(value)}%. Confirma que lo entiendes para guardar.`);
+    }
+    Object.assign(value, { confirmedBy: by || null, confirmedAt: new Date() });
+  } else if (prev.confirmedAt) {
+    Object.assign(value, { confirmedBy: prev.confirmedBy || null, confirmedAt: prev.confirmedAt }); // apagarlo no borra quién lo confirmó
+  }
   await db.SaveIntegration('uber', tenantId, { pricing: value });
   await onMenuChanged(tenantId);
   return value;

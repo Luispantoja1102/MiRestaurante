@@ -10,6 +10,13 @@ Que el menú que se publica en Uber Eats salga con precios suficientes para que,
 - Pantalla `UberPricing.vue` en Ajustes → Uber Eats: casilla, plan, comisión propia, marketing, redondeo, y tabla «En tu local / En Uber / Te quedan» que se recalcula mientras se escribe.
 - Pruebas: `uber.test.js` (precios, permisos, validaciones, republicar, apagar) y `tax.test.js` (el ejemplo del plan Plus).
 
+## Frenos contra precios mal puestos
+- **Uber no dice qué plan tiene cada comercio:** en la documentación de la API de Uber Eats (tiendas, menús, pedidos, promociones) no se encontró ningún dato de plan ni de comisión. Existe una API de reportes (`POST /v1/eats/report`, Payment Details Report, CSV, máximo 32 días) que podría servir para comparar la comisión real después; no se confirmó su permiso ni el contenido del CSV.
+- **Confirmación del plan:** para activar los precios, una persona marca «Confirmo que mi plan es X (n %)…»; el servidor lo exige (`confirmed: true`) y guarda `confirmedBy` y `confirmedAt`. Cambiar de plan o de porcentajes pide confirmar de nuevo. Apagar no pide confirmar y conserva quién lo confirmó.
+- **Tope y aviso de aumento:** si Uber se quedaría más de la mitad de la venta (>50 %) no se permite (los precios subirían más del doble). Si se queda más de 36 % (el plan Plus es 31.32 %), se muestra «Es un aumento fuerte» y hay que marcar una segunda casilla (`confirmHigh`). La pantalla siempre dice cuánto suben los precios (Plus ≈ 45.6 %).
+- **Menú:** en «Menú en Uber Eats» un letrero dice si los precios están ajustados y, si no, publicar pide una confirmación más fuerte.
+- Pendiente (depende de Uber): comparar la comisión real del reporte de pagos con la configurada.
+
 ## Límites y dudas
 - **Supuesto:** Uber calcula su comisión sobre el precio publicado (lo que paga el cliente por los platillos). Confirmar con una liquidación real de Uber; si la base fuera otra, solo cambia la fórmula en `uberCut`/`uberGross`.
 - **El 16 % de IVA sobre la comisión** está fijo en el código (`IVA_ON_COMMISSION`).

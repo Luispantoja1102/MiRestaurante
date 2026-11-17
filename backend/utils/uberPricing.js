@@ -21,6 +21,11 @@ const ROUNDINGS = [0, 1, 5, 10]; // hacia arriba al peso, a 5 o a 10 pesos; 0 = 
 
 const DEFAULT_PRICING = { enabled: false, plan: 'plus', commissionPct: 27, marketingPct: 0, rounding: 1 };
 
+// Frenos contra aumentos bruscos: si Uber se quedara más de la mitad de cada venta los precios subirían más del doble
+// (no se permite); pasando de HIGH_CUT hay que confirmar que se entiende el aumento. Con el plan Plus (31.32 %) no se activa.
+const MAX_CUT = 0.5;
+const HIGH_CUT = 0.36;
+
 const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
 
 /** Valida lo que manda la pantalla. @returns { value } o { error } */
@@ -33,11 +38,19 @@ function normalizePricing(input = {}) {
   if (marketingPct < 0 || marketingPct > 30) return { error: 'El marketing va de 0 a 30 %' };
   const rounding = Number(input.rounding);
   if (!ROUNDINGS.includes(rounding)) return { error: 'El redondeo debe ser a centavos, a 1, a 5 o a 10 pesos' };
-  return { value: { enabled: Boolean(input.enabled), plan, commissionPct: round2(commissionPct), marketingPct: round2(marketingPct), rounding } };
+  const value = { enabled: Boolean(input.enabled), plan, commissionPct: round2(commissionPct), marketingPct: round2(marketingPct), rounding };
+  if (uberCut(value) > MAX_CUT) return { error: `Con esos porcentajes Uber se quedaría ${Math.round(uberCut(value) * 100)}% de cada venta y los precios subirían más del doble. Revisa la comisión y el marketing.` };
+  return { value };
 }
 
 /** Qué parte de cada venta se queda Uber (0 a 1), con el IVA de su comisión y el marketing. */
 const uberCut = (p) => (num(p.commissionPct, 0) * (1 + IVA_ON_COMMISSION) + num(p.marketingPct, 0)) / 100;
+
+/** Cuánto suben los precios en Uber respecto al local, en % (sin contar el redondeo). Plus: 45.6 %. */
+const increasePct = (p) => Math.round((uberCut(p) / (1 - uberCut(p))) * 1000) / 10;
+
+/** ¿El aumento es fuerte (Uber se queda más de HIGH_CUT)? Pide una segunda confirmación. */
+const isHighIncrease = (p) => uberCut(p) > HIGH_CUT;
 
 /** Precio al cliente en Uber (con IVA) que deja al negocio lo mismo que `base` en su local. */
 function uberGross(base, pricing) {
@@ -64,4 +77,4 @@ function uberPrice(menuPrice, { includesTax = true, taxRate = 0.08 } = {}, prici
   return { base, gross, price: includesTax ? gross : round2(gross / (1 + rate)), net: round2(gross * (1 - uberCut(pricing))) };
 }
 
-module.exports = { PLANS, IVA_ON_COMMISSION, ROUNDINGS, DEFAULT_PRICING, normalizePricing, uberCut, uberGross, uberPrice };
+module.exports = { PLANS, IVA_ON_COMMISSION, ROUNDINGS, DEFAULT_PRICING, MAX_CUT, HIGH_CUT, normalizePricing, uberCut, increasePct, isHighIncrease, uberGross, uberPrice };
