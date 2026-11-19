@@ -21,6 +21,12 @@ let storeState = { status: 'ONLINE' }; // estado de la tienda en Uber
 let createdOrders = []; // ids que Uber tiene en CREATED (null = Uber falla)
 let storeAvgPrep = 15; // avg_prep_time de la tienda (null = Uber falla al consultarla)
 let prepFails = false;
+const unknownStores = new Set(); // Store IDs que Uber no reconoce para esta aplicación
+let holidayState = { holiday_hours: {} }; // horarios especiales que Uber tiene guardados
+let cancelFails = null;
+const fulfillmentOrders = {};
+let offeredNew = null;
+let readyFails = null; // status con el que falla «marcar listo»
 
 // Los pedidos a la API local pasan; todo lo de Uber se simula.
 global.fetch = async (url, opts = {}) => {
@@ -30,11 +36,25 @@ global.fetch = async (url, opts = {}) => {
   uberCalls.push({ url: u, method: opts.method || 'GET', body: raw, headers: opts.headers || {} });
   const json = (status, data) => new Response(data === undefined ? null : JSON.stringify(data), { status });
   if (u.includes('/oauth/v2/token')) return json(200, { access_token: 'tk', expires_in: 2592000 });
-  if (/\/v1\/eats\/stores\/[^/?]+$/.test(u)) return storeAvgPrep == null ? json(500, {}) : json(200, { name: 'Tienda', avg_prep_time: storeAvgPrep });
+  if (/\/v1\/eats\/stores\/[^/?]+$/.test(u)) {
+    if (unknownStores.has(decodeURIComponent(u.split('/').pop()))) return json(401, { code: 'unauthorized', message: 'User not allowed to access the store' });
+    return storeAvgPrep == null ? json(500, {}) : json(200, { name: 'Tienda', avg_prep_time: storeAvgPrep });
+  }
   if (/\/v1\/delivery\/store\/[^/]+\/update-store-prep-time$/.test(u)) return prepFails ? json(404, { message: 'no existe' }) : json(204);
+  if (/\/v1\/eats\/stores\/[^/]+\/holiday-hours$/.test(u)) {
+    if ((opts.method || 'GET') === 'POST') {
+      if (uberFails) return json(uberFails, { message: 'fechas inválidas' });
+      holidayState = JSON.parse(opts.body); // reemplaza todo, como Uber
+      return json(200);
+    }
+    return json(200, holidayState);
+  }
   if (/\/v1\/eats\/stores\/[^/]+\/created-orders/.test(u)) {
     return createdOrders ? json(200, { orders: createdOrders.map((id) => ({ id, current_state: 'CREATED', placed_at: '2026-11-16T10:00:00Z' })) }) : json(500, {});
   }
+  const nw = u.match(/\/v1\/delivery\/order\/([^/?]+)\?expand/);
+  if (nw) return fulfillmentOrders[nw[1]] ? json(200, fulfillmentOrders[nw[1]]) : json(500, {}); // sin formato nuevo: se cae a la ruta vieja
+  if (/\/v1\/delivery\/store\/[^/]+\/orders\?/.test(u)) return offeredNew ? json(200, { data: offeredNew.map((id) => ({ order: { id, state: 'OFFERED' } })) }) : json(500, {});
   const m = u.match(/\/v2\/eats\/order\/([^/?]+)/);
   if (m) return uberOrders[m[1]] ? json(200, uberOrders[m[1]]) : json(404, {});
   if (/\/v1\/eats\/store\/[^/]+\/status$/.test(u)) {
@@ -47,7 +67,11 @@ global.fetch = async (url, opts = {}) => {
   }
   if (/\/v2\/eats\/stores\/[^/]+\/menus$/.test(u) && opts.method === 'PUT') return uberFails ? json(uberFails, { error: 'precio inválido' }) : json(204);
   if (/\/v2\/eats\/stores\/[^/]+\/menus\/items\/[^/]+$/.test(u)) return uberFails ? json(uberFails, {}) : json(204);
-  if (/accept_pos_order|deny_pos_order|\/cancel$|restaurantdelivery\/status$/.test(u)) return uberFails ? json(uberFails, {}) : json(204);
+  if (/\/v1\/delivery\/order\/[^/]+\/ready$/.test(u)) return readyFails ? json(readyFails, { message: 'no se pudo' }) : json(200, {});
+  if (/\/update-ready-time$/.test(u)) return json(200);
+  if (/\/resolve-fulfillment-issues$/.test(u)) return json(200, { should_wait_for_customer_response: true });
+  if (cancelFails && /\/cancel$/.test(u)) return json(cancelFails, {});
+  if (/\/v1\/delivery\/order\/[^/]+\/(accept|deny|cancel)$|restaurantdelivery\/status$/.test(u)) return uberFails ? json(uberFails, {}) : json(204);
   return json(500, {});
 };
 
@@ -99,6 +123,33 @@ test('vincular la tienda: solo el administrador, con un Store ID válido y que n
   assert.equal(otro.status, 409);
   const st = await api.call('GET', '/integrations/uber', { token: admin() });
   assert.deepEqual([st.json.configured, st.json.environment, st.json.storeId], [true, 'sandbox', STORE]);
+});
+
+test('vincular con el Store ID: solo si Uber reconoce la tienda para esta aplicación', async () => {
+  const antes = state.integrations.find((i) => i.provider === 'uber' && i.tenantId === 't1');
+  const put = (storeId) => api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId } });
+
+  // Un ID inventado: Uber dice que no tiene acceso, y no queda «vinculada»
+  unknownStores.add('inventada-xyz-123');
+  const mala = await put('inventada-xyz-123');
+  assert.equal(mala.status, 400);
+  assert.match(mala.text, /no reconoce esa tienda/);
+  assert.equal(state.integrations.find((i) => i.provider === 'uber' && i.tenantId === 't1')?.storeId, antes?.storeId, 'la vinculación no cambió');
+  assert.equal((state.uberEvents || []).some((e) => e.eventType === 'api.link' && e.outcome === 'error'), true, 'queda en la bitácora');
+
+  // Uber caído: no se puede verificar, tampoco se vincula
+  storeAvgPrep = null;
+  const caido = await put('tienda-caida-0001');
+  storeAvgPrep = 15;
+  assert.equal(caido.status, 502);
+  assert.match(caido.text, /No se pudo verificar/);
+
+  // Uber la reconoce: se vincula y se guarda su nombre
+  const buena = await put('tienda-real-0002');
+  assert.equal(buena.status, 200, buena.text);
+  assert.deepEqual([buena.json.storeId, buena.json.storeName], ['tienda-real-0002', 'Tienda']);
+  assert.equal(state.integrations.find((i) => i.provider === 'uber' && i.tenantId === 't1').storeName, 'Tienda');
+  await put(STORE); // se deja como las demás pruebas esperan
 });
 
 test('el webhook rechaza lo que no viene firmado por Uber', async () => {
@@ -186,15 +237,19 @@ test('aceptar avisa a Uber, cobra como Plataforma en la caja abierta y manda el 
   assert.equal(r.json.paymentStatus, 'paid');
   assert.equal(r.json.cashSessionId, 'c1');
   assert.equal(r.json.external.state, 'accepted');
-  const call = uberCalls.filter((c) => c.url.endsWith('/v1/eats/orders/o-aaaaa1/accept_pos_order')).pop();
+  const call = uberCalls.filter((c) => c.url.endsWith('/v1/delivery/order/o-aaaaa1/accept')).pop();
   assert.ok(call.url.startsWith('https://test-api.uber.com/'));
   assert.equal(JSON.parse(call.body).external_reference_id, o.id);
+  assert.equal(JSON.parse(call.body).accepted_by, 'caro');
   // ya no espera respuesta: no se puede aceptar dos veces
   assert.equal((await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier() })).status, 400);
 });
 
-test('sin pantalla de Cocina (solo para llevar o con meseros) el pedido aceptado pasa directo a Listo', async () => {
-  for (const [i, serviceFocus] of ['takeaway', 'waiters'].entries()) {
+test('un pedido aceptado queda En preparación (con o sin cocina) y se marca listo con un toque, que le avisa a Uber', async () => {
+  const readyCalls = (id) => uberCalls.filter((c) => c.method === 'POST' && c.url.endsWith(`/v1/delivery/order/${id}/ready`));
+  const setStatus = (order, status) => api.call('PUT', `/orders/${order.id}/status`, { token: cashier(), body: { status } });
+
+  for (const [i, serviceFocus] of ['takeaway', 'waiters', 'full'].entries()) {
     const id = `o-kkkkk${i + 1}`;
     uberOrders[id] = sample(id, { type: 'PICK_UP' });
     await hook(body('orders.notification', id));
@@ -202,9 +257,46 @@ test('sin pantalla de Cocina (solo para llevar o con meseros) el pedido aceptado
     const r = await api.call('PUT', `/orders/${uberOrder(id).id}/external/accept`, { token: cashier() });
     delete state.settings.t1;
     assert.equal(r.status, 200, r.text);
-    assert.equal(r.json.status, 'ready', serviceFocus);
+    assert.equal(r.json.status, 'preparing', `${serviceFocus}: no está listo solo por haberlo aceptado`);
     assert.equal(r.json.external.state, 'accepted');
+    assert.equal(readyCalls(id).length, 0, 'aún no se avisa a Uber');
   }
+
+  // «Listo»: avisa a Uber una sola vez y lo anota
+  const a = uberOrder('o-kkkkk1');
+  const listo = await setStatus(a, 'ready');
+  assert.equal(listo.status, 200, listo.text);
+  assert.equal(listo.json.status, 'ready');
+  assert.ok(listo.json.external.readyNotifiedAt && !listo.json.external.readyError);
+  assert.equal(readyCalls('o-kkkkk1').length, 1);
+  assert.equal((await setStatus(a, 'ready')).status, 200);
+  assert.equal(readyCalls('o-kkkkk1').length, 1, 'no se avisa dos veces');
+
+  // Si Uber no lo acepta: queda listo aquí, se avisa en pantalla, queda en la bitácora y se puede reintentar
+  const b = uberOrder('o-kkkkk2');
+  readyFails = 404;
+  const falla = await setStatus(b, 'ready');
+  assert.equal(falla.status, 200);
+  assert.deepEqual([falla.json.status, !!falla.json.external.readyNotifiedAt, !!falla.json.external.readyError], ['ready', false, true]);
+  assert.ok((state.uberEvents || []).some((e) => e.eventType === 'api.ready' && e.outcome === 'error'));
+  readyFails = null;
+  const retry = await setStatus(b, 'ready');
+  assert.ok(retry.json.external.readyNotifiedAt && !retry.json.external.readyError, 'el reintento funciona');
+  assert.equal(readyCalls('o-kkkkk2').length, 2);
+
+  // Cancelar solo aquí dejaría el pedido a medias en Uber (el «error de sincronización con el PDV»): hay que usar «Cancelar pedido»
+  const c = uberOrder('o-kkkkk3');
+  const mal = await setStatus(c, 'cancelled');
+  assert.equal(mal.status, 400);
+  assert.match(mal.text, /Cancelar pedido/);
+  assert.equal(uberOrder('o-kkkkk3').status, 'preparing');
+
+  // Un pedido que no es de Uber no llama a Uber
+  const local = { id: 'o-local-ready', tenantId: 't1', status: 'preparing', paymentStatus: 'unpaid', total: 10, items: [] };
+  state.orders.push(local);
+  const antes = uberCalls.length;
+  assert.equal((await setStatus(local, 'ready')).status, 200);
+  assert.equal(uberCalls.length, antes);
 });
 
 test('rechazar avisa a Uber con el motivo y cancela el pedido', async () => {
@@ -215,8 +307,10 @@ test('rechazar avisa a Uber con el motivo y cancela el pedido', async () => {
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.status, 'cancelled');
   assert.equal(r.json.external.state, 'denied');
-  const call = uberCalls.filter((c) => c.url.endsWith('/o-bbbbb2/deny_pos_order')).pop();
-  assert.deepEqual(JSON.parse(call.body).reason, { code: 'ITEM_AVAILABILITY', explanation: 'Sin leche' });
+  assert.ok(r.json.external.uberCanceledAt, 'también se cancela en Uber para que salga de la tablet');
+  assert.deepEqual(JSON.parse(lastCall('/o-bbbbb2/cancel').body), { cancellation_reason: { type: 'ITEM_ISSUE', info: 'Sin leche' } });
+  const call = uberCalls.filter((c) => c.url.endsWith('/o-bbbbb2/deny')).pop();
+  assert.deepEqual(JSON.parse(call.body).deny_reason, { type: 'ITEM_ISSUE', info: 'Sin leche' });
 });
 
 test('un motivo desconocido se envía como OTHER', async () => {
@@ -224,8 +318,8 @@ test('un motivo desconocido se envía como OTHER', async () => {
   await hook(body('orders.notification', 'o-ccccc3'));
   const o = uberOrder('o-ccccc3');
   await api.call('PUT', `/orders/${o.id}/external/deny`, { token: cashier(), body: { code: 'INVENTADO' } });
-  const call = uberCalls.filter((c) => c.url.endsWith('/o-ccccc3/deny_pos_order')).pop();
-  assert.equal(JSON.parse(call.body).reason.code, 'OTHER');
+  const call = uberCalls.filter((c) => c.url.endsWith('/o-ccccc3/deny')).pop();
+  assert.equal(JSON.parse(call.body).deny_reason.type, 'OTHER');
 });
 
 test('si Uber cancela el pedido, se cancela aquí', async () => {
@@ -275,9 +369,8 @@ test('las alergias y notas del cliente llegan al pedido, y al aceptar se avisa a
   const antes = Date.now();
   const r = await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier(), body: { prepMinutes: 20 } });
   assert.equal(r.status, 200, r.text);
-  const sent = JSON.parse(lastCall('/o-ggggg7/accept_pos_order').body);
-  assert.deepEqual(sent.fields_relayed, { order_special_instructions: true, item_special_instructions: true, item_special_requests: true });
-  assert.ok(Math.abs(sent.pickup_time * 1000 - (antes + 20 * 60_000)) < 10_000, 'listo en ~20 minutos');
+  const sent = JSON.parse(lastCall('/o-ggggg7/accept').body);
+  assert.ok(Math.abs(Date.parse(sent.ready_for_pickup_time) - (antes + 20 * 60_000)) < 10_000, 'listo en ~20 minutos');
   assert.ok(r.json.external.pickupAt);
 });
 
@@ -290,7 +383,7 @@ test('cancelar un pedido aceptado: pide motivo, avisa a Uber y lo saca del cierr
   const r = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual([r.json.status, r.json.paymentStatus, r.json.external.state, r.json.external.cancelReason], ['cancelled', 'refunded', 'canceled', 'OUT_OF_ITEMS']);
-  assert.deepEqual(JSON.parse(lastCall('/o-ggggg7/cancel').body), { reason: 'OUT_OF_ITEMS' });
+  assert.deepEqual(JSON.parse(lastCall('/o-ggggg7/cancel').body), { cancellation_reason: { type: 'ITEM_ISSUE' } });
   assert.equal(Number((antes - (await platformTotal())).toFixed(2)), o.total, 'el pedido ya no cuenta como cobrado');
   assert.equal((await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } })).status, 400, 'ya terminó');
 
@@ -298,6 +391,17 @@ test('cancelar un pedido aceptado: pide motivo, avisa a Uber y lo saca del cierr
   uberOrders['o-hhhhh8'] = sample('o-hhhhh8');
   await hook(body('orders.notification', 'o-hhhhh8'));
   assert.equal((await api.call('PUT', `/orders/${uberOrder('o-hhhhh8').id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } })).status, 400);
+});
+
+test('los seis motivos de cancelación se mandan con el `type` de Uber; uno desconocido va como OTHER', async () => {
+  const svc = require('../services/uber.service');
+  const esperado = { OUT_OF_ITEMS: 'ITEM_ISSUE', KITCHEN_CLOSED: 'KITCHEN_CLOSED', CUSTOMER_CALLED_TO_CANCEL: 'CUSTOMER_CALLED_TO_CANCEL', RESTAURANT_TOO_BUSY: 'RESTAURANT_TOO_BUSY', CANNOT_COMPLETE_CUSTOMER_NOTE: 'SPECIAL_INSTRUCTIONS', OTHER: 'OTHER' };
+  for (const [reason, type] of Object.entries(esperado)) {
+    await svc.cancelOrder('o-motivos', { reason });
+    assert.equal(JSON.parse(lastCall('/o-motivos/cancel').body).cancellation_reason.type, type);
+  }
+  await svc.cancelOrder('o-motivos', { reason: 'INVENTADO' });
+  assert.equal(JSON.parse(lastCall('/o-motivos/cancel').body).cancellation_reason.type, 'OTHER');
 });
 
 test('si Uber ya no permite cancelar, el pedido sigue igual', async () => {
@@ -310,6 +414,265 @@ test('si Uber ya no permite cancelar, el pedido sigue igual', async () => {
   assert.match(r.text, /ya no permite/);
   assert.equal(uberOrder('o-hhhhh8').status !== 'cancelled', true);
   assert.equal(uberOrder('o-hhhhh8').paymentStatus, 'paid');
+});
+
+test('un pedido servido se puede cancelar 2 horas (servido no avisa a Uber), salvo si lo reparte el restaurante', async () => {
+  const o = uberOrder('o-hhhhh8');
+  o.status = 'served';
+  o.updatedAt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  const old = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
+  assert.equal(old.status, 400, 'pasaron más de 2 horas');
+
+  o.updatedAt = new Date();
+  const r = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.json.status, r.json.paymentStatus], ['cancelled', 'refunded']);
+
+  uberOrders['o-sssss1'] = sample('o-sssss1', { type: 'DELIVERY_BY_RESTAURANT' });
+  await hook(body('orders.notification', 'o-sssss1'));
+  const own = uberOrder('o-sssss1');
+  await api.call('PUT', `/orders/${own.id}/external/accept`, { token: cashier() });
+  own.status = 'served';
+  own.updatedAt = new Date();
+  assert.equal((await api.call('PUT', `/orders/${own.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } })).status, 400, 'ya lo entregó el restaurante');
+});
+
+test('si Uber no deja cancelar un pedido rechazado, el rechazo se guarda y se puede reintentar', async () => {
+  uberOrders['o-ttttt1'] = sample('o-ttttt1');
+  await hook(body('orders.notification', 'o-ttttt1'));
+  const o = uberOrder('o-ttttt1');
+  cancelFails = 404;
+  const d = await api.call('PUT', `/orders/${o.id}/external/deny`, { token: cashier(), body: { code: 'OTHER', explanation: 'x' } });
+  assert.equal(d.status, 200, d.text);
+  assert.deepEqual([uberOrder('o-ttttt1').external.state, uberOrder('o-ttttt1').external.uberCanceledAt], ['denied', undefined]);
+
+  const bad = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'KITCHEN_CLOSED' } });
+  cancelFails = null;
+  assert.equal(bad.status, 502);
+  assert.equal(uberOrder('o-ttttt1').external.uberCanceledAt, undefined, 'si Uber no lo permite, sigue igual');
+
+  const r = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'KITCHEN_CLOSED' } });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.json.status, r.json.external.state], ['cancelled', 'denied']);
+  assert.ok(r.json.external.uberCanceledAt);
+});
+
+// Pedido en el formato nuevo de Uber (Order Fulfillment API): los precios van en `payment`, en e5
+const e5 = (n) => ({ amount_e5: Math.round(n * 100_000), currency_code: 'MXN' });
+const money5 = (net, tax = 0) => ({ net: e5(net), tax: e5(tax), gross: e5(net + tax) });
+const fulfillment = (id, over = {}) => ({
+  order: {
+    id,
+    display_id: id.slice(-5).toUpperCase(),
+    state: 'OFFERED',
+    fulfillment_type: 'DELIVERY_BY_MERCHANT',
+    customers: [{ name: { first_name: 'Luis', last_name: 'Mora' }, contact: { phone: { number: '+52 33 1111 2222' } } }],
+    carts: [{
+      special_instructions: 'Tocar el timbre',
+      include_single_use_items: false,
+      items: [
+        { id: 'p-1', cart_item_id: 'ci-1', title: 'Latte', quantity: { amount: 2 }, customer_request: { special_instructions: 'sin azúcar', allergy: { allergens: ['DAIRY', 'EGG'], instructions: 'soy muy alérgico' } }, selected_modifier_groups: [{ selected_items: [{ id: 'm-1', title: 'Leche de avena', quantity: { amount: 1 } }] }] },
+        { id: 'p-2', cart_item_id: 'ci-2', title: 'Pan dulce', quantity: { amount: 1 } },
+      ],
+    }],
+    payment: {
+      payment_detail: {
+        order_total: money5(115, 9.2),
+        item_charges: { total: money5(115), price_breakdown: [{ cart_item_id: 'ci-1', unit: money5(40) }, { cart_item_id: 'ci-2', unit: money5(35) }] },
+      },
+    },
+    preparation_time: { ready_for_pickup_time: '2026-11-19T20:00:00Z' },
+    ...over,
+  },
+});
+
+test('pedido en el formato nuevo: productos, precios del pago, alergias, tipo de entrega y notas', async () => {
+  fulfillmentOrders['o-new0001'] = fulfillment('o-new0001');
+  await hook(body('orders.notification', 'o-new0001'));
+  const o = uberOrder('o-new0001');
+  assert.equal(o.customerName, 'Luis Mora');
+  assert.deepEqual(o.items.map((i) => [i.name, i.quantity, i.price]), [['Latte', 2, 40], ['Pan dulce', 1, 35]]);
+  assert.match(o.items[0].notes, /ALERGIA: lácteos, huevo · soy muy alérgico/);
+  assert.match(o.items[0].notes, /\+ Leche de avena/);
+  assert.deepEqual([o.subtotal, o.tax, o.total], [115, 9.2, 124.2]);
+  assert.equal(o.external.type, 'DELIVERY_BY_RESTAURANT', 'DELIVERY_BY_MERCHANT se guarda con el nombre de siempre');
+  assert.equal(o.external.allergy, true);
+  assert.match(o.notes, /Tocar el timbre · Sin cubiertos/);
+  assert.equal(o.delivery.phone, '+52 33 1111 2222');
+});
+
+test('la lista nueva de pedidos (OFFERED) recupera los que no llegaron por aviso', async () => {
+  fulfillmentOrders['o-new0002'] = fulfillment('o-new0002', { fulfillment_type: 'PICKUP' });
+  offeredNew = ['o-new0002'];
+  const out = await require('../services/uber.service').reconcileStore({ storeId: STORE, tenantId: 't1' });
+  offeredNew = null;
+  assert.equal(out.recovered, 1);
+  assert.equal(uberOrder('o-new0002').modality, 'takeaway');
+});
+
+test('un pedido esperando que Uber dio por FAILED se cierra aquí', async () => {
+  fulfillmentOrders['o-new0003'] = fulfillment('o-new0003');
+  await hook(body('orders.notification', 'o-new0003'));
+  fulfillmentOrders['o-new0003'] = fulfillment('o-new0003', { state: 'FAILED', failure_info: { reason: 'ACCEPT_TIMED_OUT' } });
+  await require('../services/uber.service').reconcileStore({ storeId: STORE, tenantId: 't1' });
+  assert.equal(uberOrder('o-new0003').status, 'cancelled');
+});
+
+// Pedido nuevo (formato de Uber) ya aceptado y con caja abierta, listo para probar lo que Uber permite después
+async function acceptedNew(id, over = {}) {
+  fulfillmentOrders[id] = fulfillment(id, over);
+  await hook(body('orders.notification', id));
+  const o = uberOrder(id);
+  const r = await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier(), body: { prepMinutes: 15 } });
+  assert.equal(r.status, 200, r.text);
+  return o;
+}
+const courierHook = (id, status) => hook(JSON.stringify({ event_type: 'delivery.state_changed', event_id: `ev-${id}-${status}`, event_time: 1, meta: { order_id: id, store_id: STORE, status } }));
+
+test('estado que dice Uber: preparación, permisos y repartidor se guardan al consultarlo', async () => {
+  const o = await acceptedNew('o-sync001');
+  fulfillmentOrders['o-sync001'] = fulfillment('o-sync001', {
+    state: 'ACCEPTED',
+    preparation_status: 'PREPARING',
+    action_eligibility: { cancel: { is_eligible: false, reason: 'ya salió' }, adjust_ready_for_pickup_time: { is_eligible: true }, mark_out_of_item: { is_eligible: true } },
+    customers: [{ name: { first_name: 'Luis' }, can_respond_to_fulfillment_issues: true }],
+  });
+  const r = await api.call('PUT', `/orders/${o.id}/external/sync`, { token: cashier() });
+  assert.equal(r.status, 200, r.text);
+  const sync = r.json.external.sync;
+  assert.deepEqual([sync.preparationStatus, sync.cancel, sync.adjustReadyTime.eligible, sync.canAskCustomer], ['PREPARING', { eligible: false, reason: 'ya salió' }, true, true]);
+  // Un pedido que Uber solo entrega en el formato viejo no tiene este estado
+  uberOrders['o-sync002'] = sample('o-sync002');
+  await hook(body('orders.notification', 'o-sync002'));
+  assert.equal((await api.call('PUT', `/orders/${uberOrder('o-sync002').id}/external/sync`, { token: cashier() })).status, 502);
+});
+
+test('al marcar listo se revisa si Uber ya lo ve listo (READY_FOR_HANDOFF)', async () => {
+  const o = await acceptedNew('o-ready001');
+  fulfillmentOrders['o-ready001'] = fulfillment('o-ready001', { state: 'ACCEPTED', preparation_status: 'READY_FOR_HANDOFF' });
+  const r = await api.call('PUT', `/orders/${o.id}/status`, { token: cashier(), body: { status: 'ready' } });
+  assert.equal(r.status, 200, r.text);
+  assert.ok(r.json.external.readyNotifiedAt);
+  assert.equal(r.json.external.sync.preparationStatus, 'READY_FOR_HANDOFF');
+});
+
+test('el repartidor: se guarda dónde va y, al recoger el pedido, se cierra solo (salvo entrega propia)', async () => {
+  await acceptedNew('o-cour001', { fulfillment_type: 'DELIVERY_BY_UBER' });
+  await courierHook('o-cour001', 'EN_ROUTE_TO_PICKUP');
+  assert.deepEqual([uberOrder('o-cour001').external.courier.status, uberOrder('o-cour001').status], ['EN_ROUTE_TO_PICKUP', 'preparing']);
+  await courierHook('o-cour001', 'EN_ROUTE_TO_DROPOFF');
+  assert.equal(uberOrder('o-cour001').status, 'served');
+
+  await acceptedNew('o-cour002', { fulfillment_type: 'DELIVERY_BY_MERCHANT' });
+  await courierHook('o-cour002', 'COMPLETED');
+  assert.equal(uberOrder('o-cour002').external.courier.status, 'COMPLETED');
+  assert.equal(uberOrder('o-cour002').status, 'preparing', 'si lo reparte el restaurante, él lo marca entregado');
+  await courierHook('o-desconocido', 'COMPLETED'); // un pedido que no es nuestro no hace nada
+});
+
+test('cambiar la hora de listo: se suma a la que ya se dijo y respeta lo que Uber permite', async () => {
+  const o = await acceptedNew('o-time001');
+  const antes = new Date(uberOrder('o-time001').external.pickupAt).getTime();
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 0 } })).status, 400);
+  const r = await api.call('PUT', `/orders/${o.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 10 } });
+  assert.equal(r.status, 200, r.text);
+  assert.ok(Math.abs(new Date(r.json.external.pickupAt).getTime() - (antes + 10 * 60_000)) < 5_000);
+  assert.equal(Date.parse(JSON.parse(lastCall('/o-time001/update-ready-time').body).ready_for_pickup_time), new Date(r.json.external.pickupAt).getTime());
+
+  uberOrder('o-time001').external.sync = { adjustReadyTime: { eligible: false, reason: 'ya está listo' } };
+  const no = await api.call('PUT', `/orders/${o.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 5 } });
+  assert.equal(no.status, 400);
+  assert.match(no.text, /ya está listo/);
+});
+
+test('producto agotado: se le pregunta al cliente, no se repite y su respuesta rehace el pedido', async () => {
+  const o = await acceptedNew('o-oos001');
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/out-of-item`, { token: cashier(), body: { cartItemId: 'no-existe' } })).status, 400);
+  const r = await api.call('PUT', `/orders/${o.id}/external/out-of-item`, { token: cashier(), body: { cartItemId: 'ci-1', message: 'Se acabó la leche de avena' } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.external.askingCustomer.name, 'Latte');
+  assert.deepEqual(JSON.parse(lastCall('/o-oos001/resolve-fulfillment-issues').body), {
+    fulfillment_issues: [{ issue_type: 'OUT_OF_ITEM', action_type: 'ASK_CUSTOMER', item: { cart_item_id: 'ci-1' }, store_response: 'Se acabó la leche de avena' }],
+  });
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/out-of-item`, { token: cashier(), body: { cartItemId: 'ci-1' } })).status, 400, 'ya se le preguntó');
+
+  // El cliente quitó el Latte: llega el aviso y el pedido se rehace
+  fulfillmentOrders['o-oos001'] = fulfillment('o-oos001', {
+    carts: [{ items: [{ id: 'p-2', cart_item_id: 'ci-2', title: 'Pan dulce', quantity: { amount: 1 } }] }],
+    payment: { payment_detail: { order_total: money5(35), item_charges: { total: money5(35), price_breakdown: [{ cart_item_id: 'ci-2', unit: money5(35) }] } } },
+  });
+  await hook(body('orders.fulfillment_issues.resolved', 'o-oos001'));
+  const after = uberOrder('o-oos001');
+  assert.deepEqual([after.items.map((i) => i.name), after.total, after.external.askingCustomer], [['Pan dulce'], 35, null]);
+});
+
+test('rechazar por producto agotado le dice a Uber cuáles productos', async () => {
+  fulfillmentOrders['o-deny001'] = fulfillment('o-deny001');
+  await hook(body('orders.notification', 'o-deny001'));
+  const o = uberOrder('o-deny001');
+  assert.equal(o.items[0].cartItemId, 'ci-1');
+  const r = await api.call('PUT', `/orders/${o.id}/external/deny`, { token: cashier(), body: { code: 'ITEM_AVAILABILITY', explanation: 'Sin leche', itemIds: ['ci-1'] } });
+  assert.equal(r.status, 200, r.text);
+  const sent = JSON.parse(uberCalls.filter((c) => c.url.endsWith('/o-deny001/deny')).pop().body).deny_reason;
+  assert.deepEqual(sent, { type: 'ITEM_ISSUE', info: 'Sin leche', item_metadata: { invalid_item: [{ id: 'p-1', type: 'OUT_OF_ITEM', external_id: 'f-latte' }] } });
+});
+
+test('pedido programado: se confirma sin cobrar y, al llegar su hora, se vuelve a aceptar', async () => {
+  uberOrders['o-sched01'] = sample('o-sched01');
+  await hook(body('orders.scheduled.notification', 'o-sched01'));
+  const o = uberOrder('o-sched01');
+  assert.equal(o.external.scheduled, true);
+
+  const first = await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier(), body: { prepMinutes: 20 } });
+  assert.equal(first.status, 200, first.text);
+  assert.deepEqual([first.json.external.state, first.json.status, first.json.paymentStatus], ['scheduled', 'pending', 'unpaid']);
+  assert.equal(JSON.parse(lastCall('/o-sched01/accept').body).ready_for_pickup_time, undefined, 'a una semana de distancia no se manda hora de recogida');
+
+  // Un reintento del mismo aviso no lo reabre
+  await hook(body('orders.scheduled.notification', 'o-sched01'));
+  assert.equal(uberOrder('o-sched01').external.state, 'scheduled');
+
+  // A su hora Uber manda otro aviso: hay que aceptarlo otra vez
+  await hook(body('orders.notification', 'o-sched01'));
+  const again = uberOrder('o-sched01');
+  assert.deepEqual([again.external.state, again.external.secondRound, again.status], ['awaiting', true, 'pending']);
+  assert.ok(new Date(again.external.deadline) > new Date());
+
+  const second = await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier(), body: { prepMinutes: 15 } });
+  assert.equal(second.status, 200, second.text);
+  assert.deepEqual([second.json.external.state, second.json.status, second.json.paymentStatus], ['accepted', 'preparing', 'paid']);
+});
+
+test('un pedido programado confirmado se puede cancelar mientras espera su hora', async () => {
+  uberOrders['o-sched02'] = sample('o-sched02');
+  await hook(body('orders.scheduled.notification', 'o-sched02'));
+  const o = uberOrder('o-sched02');
+  await api.call('PUT', `/orders/${o.id}/external/accept`, { token: cashier() });
+  const r = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'CUSTOMER_CALLED_TO_CANCEL' } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.status, 'cancelled');
+});
+
+test('el cliente edita el pedido: se actualizan platillos e importes; uno desconocido se ignora', async () => {
+  uberOrders['o-edit01'] = sample('o-edit01');
+  await hook(body('orders.notification', 'o-edit01'));
+  uberOrders['o-edit01'] = sample('o-edit01', {
+    cart: { items: [{ title: 'Latte', quantity: 3, price: { unit_price: { amount: 4000 } } }] },
+    payment: { charges: { sub_total: { amount: 12000 }, tax: { amount: 0 }, total: { amount: 12000 } } },
+  });
+  await hook(body('orders.customer_order_edit', 'o-edit01'));
+  const o = uberOrder('o-edit01');
+  assert.deepEqual([o.items.length, o.items[0].quantity, o.total], [1, 3, 120]);
+  assert.ok(o.external.editedAt);
+  await hook(body('orders.customer_order_edit', 'o-no-existe'));
+  assert.equal(uberOrder('o-no-existe'), undefined);
+});
+
+test('Uber puede llamar al aviso de cancelación orders.cancelled', async () => {
+  uberOrders['o-canc01'] = sample('o-canc01');
+  await hook(body('orders.notification', 'o-canc01'));
+  await hook(body('orders.cancelled', 'o-canc01'));
+  assert.equal(uberOrder('o-canc01').status, 'cancelled');
 });
 
 test('estado de entrega: solo pedidos que reparte el restaurante, con su propio permiso de Uber', async () => {
@@ -857,6 +1220,66 @@ test('precios para Uber: el menú sube lo que cobra Uber y en el local no cambia
   await settle();
   assert.equal(sent(), Math.round(foodPrice * 100), 'sin precios para Uber se publica el precio del menú');
   assert.equal((await api.call('GET', '/integrations/uber/menu', { token: admin() })).json.pricing.enabled, false);
+});
+
+test('horarios especiales: se leen de Uber, se guardan completos y se validan', async () => {
+  const get = () => api.call('GET', '/integrations/uber/holidays', { token: admin() });
+  const put = (days, token = admin()) => api.call('PUT', '/integrations/uber/holidays', { token, body: { days } });
+  const posts = () => uberCalls.filter((c) => c.method === 'POST' && /holiday-hours$/.test(c.url));
+
+  assert.equal((await api.call('GET', '/integrations/uber/holidays', { token: cashier() })).status, 403, 'solo el administrador');
+  assert.deepEqual((await get()).json.days, []);
+
+  // Uber ya tenía uno (con la hora como «9:00»): se muestra normalizado y lo pasado no se muestra
+  holidayState = { holiday_hours: { '2000-01-01': { open_time_periods: [{ start_time: '00:00', end_time: '00:00' }] }, '2099-12-20': { open_time_periods: [{ start_time: '9:00', end_time: '14:00' }] } } };
+  assert.deepEqual((await get()).json.days, [{ date: '2099-12-20', closed: false, periods: [{ start: '09:00', end: '14:00' }] }]);
+
+  // Se guarda la lista COMPLETA (Uber reemplaza todo): cerrado un día, horario corto otro
+  const ok = await put([
+    { date: '2099-12-20', periods: [{ start: '09:00', end: '14:00' }] },
+    { date: '2099-12-24', periods: [{ start: '14:00', end: '18:00' }, { start: '09:00', end: '12:00' }] },
+    { date: '2099-12-25', closed: true },
+  ]);
+  assert.equal(ok.status, 200, ok.text);
+  assert.deepEqual(JSON.parse(posts().pop().body), {
+    holiday_hours: {
+      '2099-12-20': { open_time_periods: [{ start_time: '09:00', end_time: '14:00' }] },
+      '2099-12-24': { open_time_periods: [{ start_time: '09:00', end_time: '12:00' }, { start_time: '14:00', end_time: '18:00' }] }, // ordenados
+      '2099-12-25': { open_time_periods: [{ start_time: '00:00', end_time: '00:00' }] }, // cerrado todo el día
+    },
+  });
+  const leidos = (await get()).json.days;
+  assert.deepEqual(leidos.map((d) => [d.date, d.closed]), [['2099-12-20', false], ['2099-12-24', false], ['2099-12-25', true]]);
+
+  // Validaciones: nada llega a Uber si algo está mal
+  const antes = posts().length;
+  for (const [mala, texto] of [
+    [[{ date: '2000-01-01', closed: true }], /ya pasó/],
+    [[{ date: '2099-02-31', closed: true }], /no es válida/],
+    [[{ date: '2099-12-25', closed: true }, { date: '2099-12-25', closed: true }], /repetido/],
+    [[{ date: '2099-12-25', periods: [{ start: '14:00', end: '09:00' }] }], /después/],
+    [[{ date: '2099-12-25', periods: [{ start: '9am', end: '14:00' }] }], /de la forma 09:00/],
+    [[{ date: '2099-12-25', periods: [{ start: '09:00', end: '14:00' }, { start: '13:00', end: '18:00' }] }], /traslapan/],
+    [[{ date: '2099-12-25', periods: [] }], /necesita/],
+  ]) {
+    const r = await put(mala);
+    assert.equal(r.status, 400, texto.toString());
+    assert.match(r.text, texto);
+  }
+  assert.equal((await put(Array.from({ length: 61 }, (_, i) => ({ date: `2099-${String(1 + Math.floor(i / 28)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`, closed: true })))).status, 400, 'máximo 60 días');
+  assert.equal(posts().length, antes, 'no se mandó nada a Uber');
+
+  // Sin días: se borran todos los horarios especiales
+  assert.equal((await put([])).status, 200);
+  assert.deepEqual(JSON.parse(posts().pop().body), { holiday_hours: {} });
+
+  // Uber rechaza: 502 con su motivo y queda en la bitácora
+  uberFails = 400;
+  const falla = await put([{ date: '2099-12-25', closed: true }]);
+  uberFails = null;
+  assert.equal(falla.status, 502);
+  assert.match(falla.text, /fechas inválidas/);
+  assert.ok((state.uberEvents || []).some((e) => e.eventType === 'api.holidays' && e.outcome === 'error'));
 });
 
 test('sin credenciales de Uber el webhook responde 503', async () => {

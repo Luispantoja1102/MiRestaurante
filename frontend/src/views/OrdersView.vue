@@ -64,8 +64,16 @@
             </div>
           </div>
           <p v-if="readyText(o)" class="ready-at">{{ readyText(o) }}</p>
+          <p v-if="readyFailed(o)" class="allergy-alert" role="alert">{{ o.external.readyError }} Reintenta, o márcalo «Listo» en la tablet de Uber Eats.</p>
+          <p v-if="o.external && o.external.state === 'accepted' && !isDone(o) && !ownDelivery(o)" class="ready-at">{{ handoff(o).hint }}</p>
+          <p v-if="courierText(o)" class="ready-at">{{ courierText(o) }}</p>
+          <p v-if="uberReadyText(o)" class="ready-at">{{ uberReadyText(o) }}</p>
+          <p v-if="o.external?.askingCustomer && !isDone(o)" class="allergy-alert" role="alert">Esperando que el cliente responda por «{{ o.external.askingCustomer.name }}». Si no responde, Uber cancela el pedido.</p>
+          <p v-if="isScheduled(o)" class="ready-at">Pedido programado confirmado. Uber lo volverá a pedir a su hora y tendrás que aceptarlo otra vez; hasta entonces no se cobra ni pasa a cocina.</p>
+          <p v-if="o.external?.editedAt && !isDone(o)" class="allergy-alert" role="alert">El cliente modificó este pedido en Uber Eats. Revisa los platillos de abajo.</p>
           <div v-if="waiting(o)" class="awaiting" role="alert">
             <p><strong>{{ channelLabel[o.channel] || 'La plataforma' }} espera tu respuesta</strong> · {{ remaining(o) }}</p>
+            <p v-if="o.external?.secondRound" class="allergy-alert" role="alert"><strong>Pedido programado:</strong> ya es su hora. Acéptalo otra vez o Uber lo cancelará.</p>
             <p v-if="o.external?.allergy" class="allergy-alert"><strong>Atención:</strong> este pedido trae alergias. Revísalas abajo antes de aceptar; si no puedes cumplirlas, rechaza el pedido.</p>
             <label class="prep">Listo en
               <select v-model.number="prepMinutes">
@@ -93,25 +101,38 @@
             <div class="actions">
               <a class="link-btn" :href="`/print/order/${o.id}?mode=receipt`" target="_blank" rel="noopener" @click="printLink($event, o)">Imprimir</a>
               <button
-                v-if="o.paymentStatus !== 'paid' && !waiting(o)"
+                v-if="o.paymentStatus !== 'paid' && o.paymentStatus !== 'refunded' && o.status !== 'cancelled' && !waiting(o) && !isScheduled(o)"
                 type="button"
                 class="btn-primary"
                 :disabled="!cashOpen"
                 :title="cashOpen ? '' : 'Abre la caja primero'"
                 @click="openPay(o)"
               >Cobrar</button>
-              <button v-if="o.status === 'pending' && !waiting(o)" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
+              <button v-if="o.status === 'pending' && !waiting(o) && !isScheduled(o)" type="button" @click="setStatus(o, 'preparing')">A cocina</button>
+              <!-- Pedido de Uber ya aceptado: «listo» es lo que le avisa a Uber que mande al repartidor -->
+              <button
+                v-if="canMarkReady(o)"
+                type="button"
+                class="btn-primary"
+                title="Avisa a Uber Eats que el pedido ya está listo para recoger"
+                @click="setStatus(o, 'ready')"
+              >Listo para recoger</button>
+              <button v-if="readyFailed(o)" type="button" @click="setStatus(o, 'ready')">Reintentar aviso a Uber</button>
+              <button v-if="canAddPrep(o)" type="button" :disabled="extBusy" title="Le avisa a Uber que tardará 10 minutos más" @click="addPrep(o, 10)">+10 min</button>
+              <button v-if="canAskOutOfItem(o)" type="button" :disabled="extBusy" title="Le pregunta al cliente en su app si cambia o quita el producto" @click="askOutOfItem(o)">Producto agotado</button>
+              <button v-if="isLive(o) && !ownDelivery(o)" type="button" :disabled="extBusy" title="Pide a Uber cómo va el pedido" @click="refreshFromUber(o)">Revisar en Uber</button>
               <template v-if="ownDelivery(o)">
                 <button v-if="!o.external.deliveryStatus" type="button" :disabled="extBusy" @click="deliveryStep(o, 'started')">Salió a entregar</button>
                 <button v-if="o.external.deliveryStatus === 'started'" type="button" :disabled="extBusy" @click="deliveryStep(o, 'arriving')">Va llegando</button>
                 <button type="button" class="btn-primary" :disabled="extBusy" @click="deliveryStep(o, 'delivered')">Entregado</button>
               </template>
               <button
-                v-else-if="(o.modality === 'delivery' || (o.external && o.status === 'ready')) && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
+                v-else-if="(o.external ? o.status === 'ready' : o.modality === 'delivery') && !waiting(o) && !['served', 'cancelled'].includes(o.status)"
                 type="button"
+                :title="handoff(o).hint"
                 @click="setStatus(o, 'served')"
-              >Marcar entregado</button>
-              <button v-if="canCancelExternal(o)" type="button" :disabled="extBusy" @click="askCancel(o)">Cancelar pedido</button>
+              >{{ handoff(o).label }}</button>
+              <button v-if="canCancelExternal(o)" type="button" :disabled="extBusy" @click="askCancel(o)">{{ deniedCancellable(o) ? 'Cancelar en Uber' : 'Cancelar pedido' }}</button>
             </div>
           </div>
         </article>
@@ -132,9 +153,35 @@
             <label v-if="denyCode === 'OTHER'">Detalle<span v-if="reasonMode === 'deny'"> (opcional)</span>
               <input v-model.trim="reasonDetails" type="text" maxlength="150" :required="reasonMode === 'cancel'" />
             </label>
+            <fieldset v-if="reasonMode === 'deny' && denyCode === 'ITEM_AVAILABILITY' && denyChoices.length" class="item-pick">
+              <legend>¿Qué producto se agotó? (se lo decimos a Uber)</legend>
+              <label v-for="i in denyChoices" :key="i.cartItemId" class="pick"><input v-model="denyItems" type="checkbox" :value="i.cartItemId" /> {{ i.quantity }}× {{ i.name }}</label>
+            </fieldset>
+            <!-- Así lo dice Uber en su documentación de «Deny Order»: la tablet de Uber Eats Orders puede seguir mostrándolo -->
+            <p v-if="reasonMode === 'deny' && denyTarget.external?.provider === 'uber'" class="deny-note">
+              Si la tienda tiene la tablet de Uber Eats Orders, Uber puede dejar el pedido ahí unos minutos con «Error de sincronización con el
+              PDV». Si nadie lo acepta en la tablet, se cancela solo a los 11.5 minutos. Para quitarlo ya, recházalo también en la tablet.
+            </p>
             <div class="modal-actions">
               <button type="button" @click="denyTarget = null">Volver</button>
               <button type="button" class="btn-danger" :disabled="extBusy || (reasonMode === 'cancel' && denyCode === 'OTHER' && !reasonDetails)" @click="confirmDeny">{{ reasonMode === 'cancel' ? 'Cancelar pedido' : 'Rechazar pedido' }}</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="oosTarget" class="modal-bg" @click.self="oosTarget = null">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="oos-title">
+            <h3 id="oos-title">Producto agotado</h3>
+            <p class="deliver">Uber le pregunta al cliente en su app si lo cambia o lo quita. Mientras responde, el pedido sigue abierto; si no responde, Uber lo cancela.</p>
+            <fieldset class="item-pick">
+              <legend>¿Cuál producto?</legend>
+              <label v-for="i in oosChoices" :key="i.cartItemId" class="pick"><input v-model="oosItem" type="radio" name="oos-item" :value="i.cartItemId" /> {{ i.quantity }}× {{ i.name }}</label>
+            </fieldset>
+            <label>Mensaje para el cliente (opcional)
+              <input v-model.trim="oosMessage" type="text" maxlength="150" placeholder="Ej. Se acabó la leche de avena" />
+            </label>
+            <div class="modal-actions">
+              <button type="button" @click="oosTarget = null">Volver</button>
+              <button type="button" class="btn-primary" :disabled="extBusy || !oosItem" @click="confirmOutOfItem">Preguntar al cliente</button>
             </div>
           </div>
         </div>
@@ -199,6 +246,7 @@ const CANCEL_REASONS = [
   { code: "OUT_OF_ITEMS", label: "Se acabó un producto" },
   { code: "RESTAURANT_TOO_BUSY", label: "Mucho trabajo, no alcanzamos" },
   { code: "KITCHEN_CLOSED", label: "La cocina cerró" },
+  { code: "CUSTOMER_CALLED_TO_CANCEL", label: "El cliente llamó para cancelar" },
   { code: "CANNOT_COMPLETE_CUSTOMER_NOTE", label: "No podemos cumplir la nota del cliente" },
   { code: "OTHER", label: "Otro motivo" },
 ];
@@ -214,10 +262,32 @@ const reasonMode = ref("deny"); // deny: rechazar un pedido sin aceptar · cance
 const reasonDetails = ref("");
 const reasons = computed(() => (reasonMode.value === "cancel" ? CANCEL_REASONS : DENY_REASONS));
 const isDone = (o) => ["served", "cancelled"].includes(o.status);
-const canCancelExternal = (o) => o.external?.state === "accepted" && !isDone(o);
+// Programado y confirmado una vez: espera a que Uber lo vuelva a pedir (se puede cancelar, pero no se cobra ni se entrega aún)
+const isScheduled = (o) => o.external?.state === "scheduled" && !isDone(o);
+const isLive = (o) => o.external?.state === "accepted" && !isDone(o);
+// «Servido» no le avisa a Uber: si no lo reparte el restaurante, se puede cancelar 2 horas más (igual que en el servidor)
+const servedCancellable = (o) =>
+  o.status === "served" && o.external?.state === "accepted" && o.external.type !== "DELIVERY_BY_RESTAURANT" &&
+  Date.now() - new Date(o.updatedAt || 0).getTime() <= 2 * 60 * 60 * 1000;
+// Rechazado hace menos de 2 horas: puede seguir en la tablet de Uber; se intenta cancelar en Uber
+const deniedCancellable = (o) =>
+  o.external?.state === "denied" && !o.external.uberCanceledAt && Date.now() - new Date(o.external.closedAt || 0).getTime() <= 2 * 60 * 60 * 1000;
+const canCancelExternal = (o) => isLive(o) || isScheduled(o) || servedCancellable(o) || deniedCancellable(o);
 // Lo reparte el propio restaurante: Uber pide avisar que salió, que va llegando y que entregó
-const ownDelivery = (o) => canCancelExternal(o) && o.external.type === "DELIVERY_BY_RESTAURANT";
+const ownDelivery = (o) => isLive(o) && o.external.type === "DELIVERY_BY_RESTAURANT";
 const waiting = (o) => o.external?.state === "awaiting";
+// Pedido de Uber aceptado que todavía no se marca listo; y el que se marcó listo pero Uber no recibió el aviso
+const canMarkReady = (o) => isLive(o) && ["pending", "preparing"].includes(o.status);
+const readyFailed = (o) => Boolean(o.external?.readyError) && !o.external?.readyNotifiedAt && !isDone(o);
+// Pedido de una plataforma que NO reparte el restaurante: quien lo lleva (o lo recoge) es Uber o el cliente, y Uber no deja que
+// el restaurante marque la entrega. Cerrarlo aquí solo lo cierra en MiRestaurante: no le avisa nada a la plataforma.
+function handoff(o) {
+  if (!o.external) return { label: "Marcar entregado", hint: "" };
+  const own = ["PICK_UP", "DINE_IN"].includes(o.external.type);
+  return own
+    ? { label: "Ya lo recogió el cliente", hint: "El cliente lo recoge. Marcarlo aquí solo lo cierra en MiRestaurante; no se lo avisa a Uber." }
+    : { label: "Ya lo recogió el repartidor", hint: "Uber hace la entrega y avisa al cliente. Marcarlo aquí solo lo cierra en MiRestaurante; no se lo avisa a Uber." };
+}
 // Pedido programado y/o la hora de recogida que estima Uber
 function readyText(o) {
   const e = o.external;
@@ -249,17 +319,84 @@ async function acceptExternal(o) {
     extBusy.value = false;
   }
 }
+const denyItems = ref([]); // productos agotados que se le dicen a Uber al rechazar
+const pickable = (o) => (o?.items || []).filter((i) => i.cartItemId);
+const denyChoices = computed(() => pickable(denyTarget.value));
 function askDeny(o) {
   reasonMode.value = "deny";
   denyCode.value = "ITEM_AVAILABILITY";
   reasonDetails.value = "";
+  denyItems.value = [];
   denyTarget.value = o;
 }
-function askCancel(o) {
+async function askCancel(o) {
+  extErr.value = "";
+  let cur = o;
+  // Antes de abrir el aviso se le pregunta a Uber si deja cancelar (si no contesta, se sigue como antes)
+  if (o.external?.state === "accepted") {
+    try {
+      cur = await apiService.syncExternalOrder(o.id);
+      replaceOrder(cur);
+    } catch {
+      cur = o;
+    }
+    const c = cur.external?.sync?.cancel;
+    if (c && c.eligible === false) {
+      extErr.value = `Uber no permite cancelar este pedido${c.reason ? `: ${c.reason}` : ""}.`;
+      return;
+    }
+    if (isDone(cur) && !servedCancellable(cur)) return;
+  }
   reasonMode.value = "cancel";
   denyCode.value = "OUT_OF_ITEMS";
   reasonDetails.value = "";
-  denyTarget.value = o;
+  denyTarget.value = cur;
+}
+// ——— Lo que Uber dice del pedido: repartidor, si ya lo ve listo, más tiempo y producto agotado ———
+const COURIER_TEXT = {
+  EN_ROUTE_TO_PICKUP: "Repartidor en camino al local",
+  ARRIVED_AT_PICKUP: "El repartidor llegó al local",
+  EN_ROUTE_TO_DROPOFF: "El repartidor ya lo recogió y va con el cliente",
+  ARRIVED_AT_DROPOFF: "El repartidor llegó con el cliente",
+  COMPLETED: "Entregado al cliente",
+};
+const courierText = (o) => (o.external?.provider === "uber" ? COURIER_TEXT[o.external?.courier?.status] || "" : "");
+function uberReadyText(o) {
+  const e = o.external;
+  if (!e?.readyNotifiedAt || isDone(o)) return "";
+  if (e.sync?.preparationStatus === "READY_FOR_HANDOFF") return "Uber confirmó que el pedido está listo para recoger.";
+  return e.sync ? "Avisaste a Uber que está listo, pero Uber aún lo muestra en preparación. Usa «Revisar en Uber»." : "Ya le avisaste a Uber que está listo.";
+}
+const canAddPrep = (o) => canMarkReady(o) && !o.external?.readyNotifiedAt && o.external?.sync?.adjustReadyTime?.eligible !== false;
+const canAskOutOfItem = (o) =>
+  isLive(o) && !o.external?.readyNotifiedAt && !o.external?.askingCustomer && pickable(o).length > 0 && o.external?.sync?.outOfItem?.eligible !== false;
+async function runExternal(call, fallback) {
+  extBusy.value = true;
+  extErr.value = "";
+  try {
+    replaceOrder(await call());
+  } catch (e) {
+    extErr.value = e.response?.data || fallback;
+    await load();
+  } finally {
+    extBusy.value = false;
+  }
+}
+const refreshFromUber = (o) => runExternal(() => apiService.syncExternalOrder(o.id), "No se pudo consultar a Uber Eats.");
+const addPrep = (o, minutes) => runExternal(() => apiService.setExternalReadyTime(o.id, minutes), "No se pudo cambiar la hora de listo.");
+const oosTarget = ref(null);
+const oosItem = ref("");
+const oosMessage = ref("");
+const oosChoices = computed(() => pickable(oosTarget.value));
+function askOutOfItem(o) {
+  oosItem.value = "";
+  oosMessage.value = "";
+  oosTarget.value = o;
+}
+async function confirmOutOfItem() {
+  const o = oosTarget.value;
+  oosTarget.value = null;
+  await runExternal(() => apiService.externalOutOfItem(o.id, oosItem.value, oosMessage.value), "No se pudo avisar del producto agotado.");
 }
 async function deliveryStep(o, status) {
   extBusy.value = true;
@@ -282,7 +419,7 @@ async function confirmDeny() {
     replaceOrder(
       cancel
         ? await apiService.cancelExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value)
-        : await apiService.denyExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value || label)
+        : await apiService.denyExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value || label, denyItems.value)
     );
     denyTarget.value = null;
   } catch (e) {
@@ -463,9 +600,14 @@ async function confirmPay() {
 }
 
 async function setStatus(o, status) {
-  const updated = await apiService.updateOrderStatus(o.id, status);
-  const idx = orders.value.findIndex((x) => x.id === updated.id);
-  if (idx >= 0) orders.value[idx] = updated;
+  extErr.value = "";
+  try {
+    const updated = await apiService.updateOrderStatus(o.id, status);
+    const idx = orders.value.findIndex((x) => x.id === updated.id);
+    if (idx >= 0) orders.value[idx] = updated;
+  } catch (e) {
+    extErr.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo cambiar el estado del pedido.";
+  }
 }
 
 onMounted(async () => {
@@ -575,6 +717,7 @@ onUnmounted(() => {
   letter-spacing: -0.01em;
   font-size: 1.35rem;
 }
+.deny-note { margin: 0; padding: 0.6rem 0.7rem; border-radius: 0.7rem; background: var(--mirestaurante-primary-soft); font-size: 0.82rem; line-height: 1.4; }
 .modal label { display: grid; gap: 0.35rem; font-size: 0.9rem; font-weight: 600; }
 .modal select {
   min-height: 3rem;
@@ -622,4 +765,13 @@ onUnmounted(() => {
 .awaiting-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .deliver { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--mirestaurante-muted); line-height: 1.4; }
 .deliver strong { color: var(--mirestaurante-ink); }
+.item-pick { margin: 0; padding: 0.6rem 0.8rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.8rem; display: grid; gap: 0.4rem; }
+.item-pick legend { padding: 0 0.3rem; font-size: 0.85rem; color: var(--mirestaurante-muted); }
+.item-pick .pick { display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; }
+/* Tarjeta de pedido: cada bloque (avisos, entrega, platillos, botones) con el mismo aire, sin márgenes sueltos */
+.card { display: flex; flex-direction: column; gap: 0.8rem; }
+.card > * { margin: 0; }
+.card .allergy-alert { line-height: 1.4; font-size: 0.88rem; }
+.card .foot { flex-wrap: wrap; padding-top: 0.8rem; border-top: 1px solid var(--mirestaurante-line); }
+.card .actions { justify-content: flex-end; }
 </style>

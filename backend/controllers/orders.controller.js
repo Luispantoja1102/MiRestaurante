@@ -1,5 +1,7 @@
 const db = require('../database/mongodb');
 const { rateOf, includesTax } = require('../utils/tax');
+const { todayIn } = require('../utils/holidays');
+const uber = require('../services/uber.service');
 const { normalizeOrder, priceItems, normalizeDelivery, orderStatuses, paymentMethods, channels, channelLabels, isPlatform } = require('../models/order.model');
 const inv = require('../models/inventory');
 const inventory = require('../services/inventory.service');
@@ -11,18 +13,7 @@ const MAX_QTY = 99;
 const WAITING_MSG = 'Primero acepta o rechaza el pedido de la plataforma';
 
 // Día natural en la zona horaria del negocio (el turno del mostrador se reinicia cada día).
-function dayKey(timezone) {
-  try {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone || 'America/Mexico_City',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date());
-  } catch {
-    return new Date().toISOString().slice(0, 10);
-  }
-}
+const dayKey = todayIn;
 
 async function list(req, res) {
   try {
@@ -128,7 +119,25 @@ async function updateStatus(req, res) {
     if (!existing) return res.status(404).send('Pedido no encontrado');
     if (existing.external?.state === 'awaiting') return res.status(400).send(WAITING_MSG);
 
-    const patch = { status, updatedAt: new Date() };
+    const now = new Date();
+    const patch = { status, updatedAt: now };
+    // Pedido de Uber Eats ya aceptado: lo que se cambie aquí tiene que llegar a Uber
+    const ext = existing.external;
+    const liveUber = ext?.provider === 'uber' && ext.state === 'accepted';
+    if (status === 'cancelled' && liveUber) {
+      return res.status(400).send('Este pedido es de Uber Eats: usa «Cancelar pedido», que se lo avisa a Uber. Cancelarlo solo aquí lo deja a medias en Uber.');
+    }
+    if (status === 'ready' && liveUber && !ext.readyNotifiedAt) {
+      try {
+        await uber.markOrderReady(ext.orderId); // Uber manda al repartidor cuando sabe que está listo
+        const sync = await uber.fetchStatus(ext.orderId).catch(() => null); // ¿Uber ya lo ve listo? (READY_FOR_HANDOFF)
+        patch.external = { ...ext, readyNotifiedAt: now, readyError: null, ...(sync ? { sync } : {}) };
+      } catch (err) {
+        // No frena al restaurante: queda listo aquí, se avisa en pantalla y se puede reintentar
+        uber.recordEvent({ eventType: 'api.ready', orderId: ext.orderId || null, storeId: ext.storeId || null, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+        patch.external = { ...ext, readyError: 'No se pudo avisar a Uber Eats que el pedido está listo.' };
+      }
+    }
     if (status === 'cancelled' && existing.status !== 'cancelled') {
       const restored = await inventory
         .restoreSale({ tenantId: req.tenantId, order: existing, by: req.user?.username })

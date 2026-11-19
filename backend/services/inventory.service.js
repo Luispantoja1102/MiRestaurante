@@ -32,11 +32,11 @@ async function applySale({ tenantId, order, foodsById, by }) {
 }
 
 /** Devuelve al inventario lo que descontó el pedido, una sola vez. @returns true si devolvió algo. */
-async function restoreSale({ tenantId, order, by }) {
+async function restoreSale({ tenantId, order, by, note = 'Pedido cancelado' }) {
   if (!order.stockApplied || order.stockRestored || !Array.isArray(order.stockLines)) return false;
   for (const line of order.stockLines) {
     try {
-      await db.AdjustStock(tenantId, line.ingredientId, line.amount, { type: 'return', orderId: order.id, by, note: 'Pedido cancelado' });
+      await db.AdjustStock(tenantId, line.ingredientId, line.amount, { type: 'return', orderId: order.id, by, note });
     } catch (err) {
       console.error('[inventory] no se pudo devolver un ingrediente:', err.message);
     }

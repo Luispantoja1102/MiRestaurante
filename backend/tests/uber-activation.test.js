@@ -40,6 +40,7 @@ global.fetch = async (url, opts = {}) => {
     if (p.get('grant_type') === 'authorization_code') return p.get('code')?.startsWith('code-ok') ? json(200, { access_token: `user-${p.get('code')}` }) : json(400, { error: 'invalid_grant' });
     return json(200, { access_token: 'app-token', expires_in: 2592000 });
   }
+  if (/\/v1\/eats\/stores\/[^/?]+$/.test(u)) return json(200, { name: 'Tienda manual' }); // vincular con el Store ID la verifica con Uber
   if (/\/v1\/eats\/stores\?/.test(u)) {
     if (!call.auth?.startsWith('Bearer user-')) return json(401, {});
     const start = Number(new URL(u).searchParams.get('start_key') || 0);
@@ -260,10 +261,12 @@ test('una intención de quitar vieja no secuestra una conexión nueva', async ()
   await api.call('DELETE', '/integrations/uber', { token: admin() });
 });
 
-test('vincular con el Store ID sigue disponible y no toca la tienda en Uber', async () => {
+test('vincular con el Store ID sigue disponible: Uber la verifica (solo lectura) y no se activa ni se apaga nada', async () => {
+  const antes = uberCalls.length;
   const r = await api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId: 'store-manual-0001' } });
   assert.equal(r.status, 200, r.text);
-  assert.deepEqual([integ().linkedVia, integ().storeName, integ().deprovisioned], ['manual', null, false]);
+  assert.deepEqual([integ().linkedVia, integ().storeName, integ().deprovisioned], ['manual', 'Tienda manual', false]);
+  assert.ok(uberCalls.slice(antes).every((c) => c.method === 'GET' && !/pos_data/.test(c.url)), 'solo se leyó la tienda; no se activó nada');
   const n = uberCalls.length;
   const del = await api.call('DELETE', '/integrations/uber', { token: admin() });
   assert.deepEqual([del.status, del.json.deactivated], [200, null]);

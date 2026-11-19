@@ -31,6 +31,9 @@ router.put('/:id/external/accept', requireAuth, requireActiveSubscription, requi
 router.put('/:id/external/deny', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.denyUberOrder);
 router.put('/:id/external/cancel', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.cancelUberOrder);
 router.put('/:id/external/delivery', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.deliveryStatusUberOrder);
+router.put('/:id/external/sync', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberSyncOrder);
+router.put('/:id/external/ready-time', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberReadyTime);
+router.put('/:id/external/out-of-item', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), integrations.uberAskCustomer);
 router.put('/:id/pay', requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier'), orders.pay);
 
 module.exports = router;

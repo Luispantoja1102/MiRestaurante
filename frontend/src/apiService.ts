@@ -361,6 +361,12 @@ export const apiService = {
   uberPublishMenu(open: string, close: string) {
     return axios.post('/integrations/uber/menu', { open, close }).then((r) => r.data);
   },
+  uberHolidays() {
+    return axios.get('/integrations/uber/holidays').then((r) => r.data as { today: string; days: { date: string; closed: boolean; periods: { start: string; end: string }[] }[] });
+  },
+  uberSetHolidays(days: { date: string; closed: boolean; periods: { start: string; end: string }[] }[]) {
+    return axios.put('/integrations/uber/holidays', { days }).then((r) => r.data as { today: string; days: typeof days });
+  },
   uberPricing(draft?: { plan: string; commissionPct: number; marketingPct: number; rounding: number }) {
     return axios.get('/integrations/uber/pricing', { params: draft }).then((r) => r.data);
   },
@@ -403,8 +409,17 @@ export const apiService = {
   externalDeliveryStatus(orderId: string, status: string) {
     return axios.put(`/orders/${orderId}/external/delivery`, { status }).then((r) => r.data);
   },
-  denyExternalOrder(orderId: string, code: string, explanation = '') {
-    return axios.put(`/orders/${orderId}/external/deny`, { code, explanation }).then((r) => r.data);
+  denyExternalOrder(orderId: string, code: string, explanation = '', itemIds: string[] = []) {
+    return axios.put(`/orders/${orderId}/external/deny`, { code, explanation, itemIds }).then((r) => r.data);
+  },
+  syncExternalOrder(orderId: string) {
+    return axios.put(`/orders/${orderId}/external/sync`).then((r) => r.data);
+  },
+  setExternalReadyTime(orderId: string, addMinutes: number) {
+    return axios.put(`/orders/${orderId}/external/ready-time`, { addMinutes }).then((r) => r.data);
+  },
+  externalOutOfItem(orderId: string, cartItemId: string, message = '') {
+    return axios.put(`/orders/${orderId}/external/out-of-item`, { cartItemId, message }).then((r) => r.data);
   },
   changePassword(data: { currentPassword: string; newPassword: string }) {
     return axios.put('/usuarios/password', data).then((r) => r.data);

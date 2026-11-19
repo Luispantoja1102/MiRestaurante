@@ -182,6 +182,7 @@
           </p>
 
           <UberStoreStatus v-if="uber.storeId" show-auto />
+          <UberHolidays v-if="uber.storeId" />
           <UberPricing v-if="uber.storeId" @saved="menuKey += 1" />
           <UberMenu v-if="uber.storeId" :key="menuKey" />
           <UberMetrics v-if="uber.storeId" />
@@ -372,6 +373,7 @@ import UberStoreStatus from "../components/UberStoreStatus.vue";
 import UberMetrics from "../components/UberMetrics.vue";
 import UberMenu from "../components/UberMenu.vue";
 import UberPricing from "../components/UberPricing.vue";
+import UberHolidays from "../components/UberHolidays.vue";
 import UberConnect from "../components/UberConnect.vue";
 import { apiService } from "../apiService";
 import { authStore, clearSession } from "../authStore";
@@ -596,7 +598,8 @@ async function linkUber() {
   try {
     const s = await apiService.uberLink(uber.storeInput);
     uber.storeId = s.storeId;
-    message.value = "Tienda de Uber Eats vinculada.";
+    uber.storeName = s.storeName || "";
+    message.value = s.storeName ? `Tienda «${s.storeName}» verificada con Uber Eats y vinculada.` : "Tienda de Uber Eats vinculada.";
     messageIsError.value = false;
   } catch (e) {
     uber.error = e.response?.data || "No se pudo vincular la tienda.";
