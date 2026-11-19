@@ -41,18 +41,32 @@
         <router-link to="/menu" class="btn-primary">Nuevo pedido</router-link>
       </div>
 
-      <div class="filters">
+      <!-- De dónde viene el pedido: así los de Uber Eats no se mezclan con los del local -->
+      <div class="sources" role="group" aria-label="Origen del pedido">
         <button
-          v-for="f in filters"
+          v-for="s in sourceOptions"
+          :key="s.id"
+          type="button"
+          :class="{ active: source === s.id }"
+          :aria-pressed="source === s.id"
+          @click="source = s.id"
+        >{{ s.label }} <span class="count">{{ s.count }}</span></button>
+      </div>
+      <div class="filters" role="group" aria-label="Estado del pedido">
+        <button
+          v-for="f in visibleFilters"
           :key="f.id"
           type="button"
           :class="{ active: filter === f.id }"
+          :aria-pressed="filter === f.id"
           @click="filter = f.id"
-        >{{ f.label }}</button>
+        >{{ f.label }} <span class="count">{{ countOf(f.id) }}</span></button>
       </div>
 
       <div class="list">
-        <article v-for="o in filtered" :key="o.id" class="card">
+        <template v-for="(o, idx) in filtered" :key="o.id">
+        <h4 v-if="groupStart(idx)" class="group-head">{{ groupLabel[sourceOf(o)] }} <span class="count">{{ groupCount[sourceOf(o)] }}</span></h4>
+        <article class="card">
           <div class="head">
             <div>
               <h3>{{ o.tableName || 'Sin mesa' }}</h3>
@@ -143,6 +157,7 @@
             </div>
           </div>
         </article>
+        </template>
         <p v-if="!filtered.length" class="empty">No hay pedidos en este filtro.</p>
       </div>
 
@@ -249,7 +264,7 @@
 
 <script setup>
 import { askConfirm } from "../dialog";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { bindLive } from "../live";
 import { useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
@@ -551,23 +566,100 @@ const cashBusy = ref(false);
 const cashMsg = ref("");
 const cashErr = ref("");
 
+// Estado: cada filtro dice qué pedidos deja pasar. Un pedido de plataforma aceptado ya viene cobrado, pero sigue abierto hasta entregarlo o cancelarlo.
+const filterRules = {
+  open: (o) => (o.paymentStatus !== "paid" && o.status !== "cancelled") || canCancelExternal(o),
+  unpaid: (o) => o.paymentStatus !== "paid" && o.paymentStatus !== "refunded" && o.status !== "cancelled",
+  delivery: (o) => o.modality === "delivery" && !["served", "cancelled"].includes(o.status),
+  paid: (o) => o.paymentStatus === "paid",
+  pending: (o) => o.status === "pending",
+  preparing: (o) => o.status === "preparing",
+  ready: (o) => o.status === "ready",
+  served: (o) => o.status === "served",
+  cancelled: (o) => o.status === "cancelled",
+  refunded: (o) => o.paymentStatus === "refunded",
+  all: () => true,
+};
 const filters = [
   { id: "open", label: "Abiertos" },
   { id: "unpaid", label: "Por cobrar" },
   { id: "delivery", label: "A domicilio" },
   { id: "paid", label: "Pagados" },
+  { id: "pending", label: "Pendientes" },
+  { id: "preparing", label: "Preparando" },
+  { id: "ready", label: "Listos" },
+  { id: "served", label: "Servidos" },
+  { id: "cancelled", label: "Cancelados" },
+  { id: "refunded", label: "Devueltos" },
   { id: "all", label: "Todos" },
 ];
 
+// En Uber Eats (y en el local) se filtra por pocos estados: abiertos, preparando, listos, entregados y cancelados
+const UBER_FILTERS = [
+  { id: "open", label: "Abiertos" },
+  { id: "preparing", label: "Preparando" },
+  { id: "ready", label: "Listos" },
+  { id: "served", label: "Entregados" },
+  { id: "cancelled", label: "Cancelados" },
+  { id: "all", label: "Todos" },
+];
+// Local: los mismos, más «Por cobrar» (lo principal de la caja)
+const LOCAL_FILTERS = [UBER_FILTERS[0], { id: "unpaid", label: "Por cobrar" }, ...UBER_FILTERS.slice(1)];
+const visibleFilters = computed(() => (source.value === "uber" ? UBER_FILTERS : source.value === "local" ? LOCAL_FILTERS : filters));
+
+// Origen: Uber Eats, otras apps de reparto o el local (mesa, mostrador, teléfono)
+const sourceOf = (o) => (o.channel === "uber" || o.external?.provider === "uber" ? "uber" : isPlatformChannel(o.channel) ? "other" : "local");
+const groupLabel = { uber: "Uber Eats", other: "Otras apps", local: "Local" };
+const GROUP_ORDER = { uber: 0, other: 1, local: 2 }; // lo de Uber primero: corre el tiempo para aceptarlo
+const source = ref("all");
+const countBySource = computed(() => {
+  const n = { all: orders.value.length, uber: 0, other: 0, local: 0 };
+  for (const o of orders.value) n[sourceOf(o)]++;
+  return n;
+});
+const sourceOptions = computed(() =>
+  [{ id: "all", label: "Todos" }, { id: "local", label: "Local" }, { id: "uber", label: "Uber Eats" }, { id: "other", label: "Otras apps" }]
+    .filter((s) => s.id !== "other" || countBySource.value.other > 0 || source.value === "other")
+    .map((s) => ({ ...s, count: countBySource.value[s.id] }))
+);
+const bySource = computed(() => (source.value === "all" ? orders.value : orders.value.filter((o) => sourceOf(o) === source.value)));
+const countOf = (id) => bySource.value.filter(filterRules[id]).length;
+
 const filtered = computed(() => {
-  if (filter.value === "all") return orders.value;
-  if (filter.value === "delivery") {
-    return orders.value.filter((o) => o.modality === "delivery" && !["served", "cancelled"].includes(o.status));
+  const list = bySource.value.filter(filterRules[filter.value] || filterRules.open);
+  // Con «Todos» los pedidos salen por secciones (Uber, otras apps, local), sin perder el orden dentro de cada una
+  return source.value === "all" ? [...list].sort((a, b) => GROUP_ORDER[sourceOf(a)] - GROUP_ORDER[sourceOf(b)]) : list;
+});
+const groupCount = computed(() => {
+  const n = { uber: 0, other: 0, local: 0 };
+  for (const o of filtered.value) n[sourceOf(o)]++;
+  return n;
+});
+// El título de sección solo se pone cuando se muestran pedidos de más de un origen
+const mixed = computed(() => Object.values(groupCount.value).filter(Boolean).length > 1);
+const groupStart = (idx) => source.value === "all" && mixed.value && (idx === 0 || sourceOf(filtered.value[idx - 1]) !== sourceOf(filtered.value[idx]));
+
+// Se recuerda lo último que se eligió en este dispositivo
+const VIEW_KEY = "mirestaurante_orders_view";
+try {
+  const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || "{}");
+  if (filterRules[saved.filter]) filter.value = saved.filter;
+  if (["all", "local", "uber", "other"].includes(saved.source)) source.value = saved.source;
+} catch {
+  /* sin memoria: se queda con lo de siempre */
+}
+// Si el estado elegido no existe en este origen (p. ej. «Devueltos» en Uber Eats), se vuelve a «Abiertos»
+const keepValidFilter = () => {
+  if (!visibleFilters.value.some((f) => f.id === filter.value)) filter.value = "open";
+};
+keepValidFilter();
+watch(source, keepValidFilter);
+watch([filter, source], () => {
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ filter: filter.value, source: source.value }));
+  } catch {
+    /* no pasa nada */
   }
-  if (filter.value === "paid") return orders.value.filter((o) => o.paymentStatus === "paid");
-  if (filter.value === "unpaid") return orders.value.filter((o) => o.paymentStatus !== "paid");
-  // Un pedido de plataforma aceptado ya viene cobrado, pero sigue abierto hasta entregarlo o cancelarlo
-  return orders.value.filter((o) => (o.paymentStatus !== "paid" && o.status !== "cancelled") || canCancelExternal(o));
 });
 
 function money(n) {
@@ -748,6 +840,12 @@ onUnmounted(() => {
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 .btn-danger { background:var(--mirestaurante-danger); color:#fff; border:none; border-radius:.8rem; padding:.75rem 1.1rem; font-weight:700; cursor:pointer; min-height:3rem; }
 .filters { display:flex; gap:.45rem; flex-wrap:wrap; margin-bottom:1rem; }
+.sources { display:inline-flex; gap:.2rem; flex-wrap:wrap; padding:.25rem; margin-bottom:.8rem; border:1px solid var(--mirestaurante-line); border-radius:999px; background:var(--mirestaurante-panel); }
+.sources button { border:none; background:transparent; color:var(--mirestaurante-ink); border-radius:999px; padding:.5rem 1rem; cursor:pointer; font-size:.9rem; font-weight:700; min-height:2.6rem; }
+.sources button.active { background:var(--mirestaurante-ink); color:var(--mirestaurante-panel); }
+.count { display:inline-block; min-width:1.3em; margin-left:.25rem; padding:0 .35em; border-radius:999px; background:rgba(127,127,127,.22); font-size:.78em; font-weight:700; text-align:center; }
+.group-head { margin:.9rem 0 0; font-size:.82rem; letter-spacing:.06em; text-transform:uppercase; color:var(--mirestaurante-muted); }
+.group-head:first-child { margin-top:0; }
 .filters button { border:1px solid var(--mirestaurante-line); background:var(--mirestaurante-panel-elevated); color:var(--mirestaurante-ink); border-radius:999px; padding:.55rem 1rem; cursor:pointer; font-size:.9rem; font-weight:700; min-height:2.85rem; }
 .filters button.active { background:var(--mirestaurante-primary); color:var(--mirestaurante-on-primary); border-color:transparent; }
 .list { display:grid; gap:.85rem; }
@@ -870,7 +968,7 @@ onUnmounted(() => {
 .deliver { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--mirestaurante-muted); line-height: 1.4; }
 .deliver strong { color: var(--mirestaurante-ink); }
 .prep.pickup { display: grid; width: 100%; gap: 0.35rem; }
-.prep.pickup input { width: 100%; box-sizing: border-box; }
+.prep.pickup input { width: 100%; box-sizing: border-box; min-height: 2.75rem; padding: 0.55rem 0.8rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.7rem; background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); font: inherit; }
 .item-pick { margin: 0; padding: 0.6rem 0.8rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.8rem; display: grid; gap: 0.4rem; }
 .item-pick legend { padding: 0 0.3rem; font-size: 0.85rem; color: var(--mirestaurante-muted); }
 .item-pick .pick { display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; }
