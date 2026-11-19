@@ -60,6 +60,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../../dialog";
 import { onMounted, reactive, ref } from "vue";
 import { apiService } from "../../apiService";
 import { authStore } from "../../authStore";
@@ -102,7 +103,7 @@ async function create() {
 }
 
 async function remove(p) {
-  if (!window.confirm(`¿Quitar a ${p.name} ${p.lastName} del equipo?`)) return;
+  if (!(await askConfirm(`¿Quitar a ${p.name} ${p.lastName} del equipo?`, { danger: true, confirmText: "Quitar" }))) return;
   actionErr.value = "";
   try {
     await apiService.platformDeleteStaff(p.id);

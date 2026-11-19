@@ -153,6 +153,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { computed, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 import { UNIT_OPTIONS, qtyWithUnit, unitShort } from "../inventoryUnits";
@@ -303,7 +304,7 @@ async function save() {
 }
 
 async function remove() {
-  if (!confirm(`¿Eliminar "${props.food.name}"?`)) return;
+  if (!(await askConfirm(`¿Eliminar "${props.food.name}"?`, { danger: true, confirmText: "Eliminar" }))) return;
   saving.value = true;
   try {
     await apiService.deleteFood(props.food.id);

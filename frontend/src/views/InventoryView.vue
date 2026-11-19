@@ -117,6 +117,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
@@ -201,7 +202,7 @@ async function saveIngredient() {
 }
 
 async function remove(i) {
-  if (!confirm(`¿Eliminar "${i.name}"?`)) return;
+  if (!(await askConfirm(`¿Eliminar "${i.name}"?`, { danger: true, confirmText: "Eliminar" }))) return;
   error.value = "";
   try {
     await apiService.deleteIngredient(i.id);

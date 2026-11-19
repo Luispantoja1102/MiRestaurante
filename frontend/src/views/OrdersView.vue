@@ -67,8 +67,11 @@
           <p v-if="readyFailed(o)" class="allergy-alert" role="alert">{{ o.external.readyError }} Reintenta, o márcalo «Listo» en la tablet de Uber Eats.</p>
           <p v-if="o.external && o.external.state === 'accepted' && !isDone(o) && !ownDelivery(o)" class="ready-at">{{ handoff(o).hint }}</p>
           <p v-if="courierText(o)" class="ready-at">{{ courierText(o) }}</p>
+          <p v-if="o.external?.releaseAt && !isDone(o)" class="allergy-alert" role="alert"><strong>El repartidor está por llegar.</strong> {{ o.status === "ready" ? "Entrégalo en cuanto llegue." : "El pedido debe estar listo ya." }}</p>
           <p v-if="uberReadyText(o)" class="ready-at">{{ uberReadyText(o) }}</p>
+          <p v-if="uberSummary(o) && !isDone(o)" class="ready-at">{{ uberSummary(o) }}</p>
           <p v-if="o.external?.askingCustomer && !isDone(o)" class="allergy-alert" role="alert">Esperando que el cliente responda por «{{ o.external.askingCustomer.name }}». Si no responde, Uber cancela el pedido.</p>
+          <p v-if="o.external?.priceAdjust && !isDone(o)" class="ready-at">Cambio de precio enviado ({{ money(o.external.priceAdjust.amount) }}): esperando la respuesta del cliente. «Revisar en Uber» muestra el total.</p>
           <p v-if="isScheduled(o)" class="ready-at">Pedido programado confirmado. Uber lo volverá a pedir a su hora y tendrás que aceptarlo otra vez; hasta entonces no se cobra ni pasa a cocina.</p>
           <p v-if="o.external?.editedAt && !isDone(o)" class="allergy-alert" role="alert">El cliente modificó este pedido en Uber Eats. Revisa los platillos de abajo.</p>
           <div v-if="waiting(o)" class="awaiting" role="alert">
@@ -79,6 +82,9 @@
               <select v-model.number="prepMinutes">
                 <option v-for="m in PREP_OPTIONS" :key="m" :value="m">{{ m }} min</option>
               </select>
+            </label>
+            <label class="prep pickup">Indicaciones para el repartidor (opcional)
+              <input v-model.trim="pickupNote" type="text" maxlength="200" placeholder="Ej. La entrada está cerrada, usen el carril de autoservicio" />
             </label>
             <div class="awaiting-actions">
               <button type="button" class="btn-primary" :disabled="!cashOpen || extBusy" :title="cashOpen ? '' : 'Abre la caja primero'" @click="acceptExternal(o)">Aceptar pedido</button>
@@ -119,7 +125,8 @@
               >Listo para recoger</button>
               <button v-if="readyFailed(o)" type="button" @click="setStatus(o, 'ready')">Reintentar aviso a Uber</button>
               <button v-if="canAddPrep(o)" type="button" :disabled="extBusy" title="Le avisa a Uber que tardará 10 minutos más" @click="addPrep(o, 10)">+10 min</button>
-              <button v-if="canAskOutOfItem(o)" type="button" :disabled="extBusy" title="Le pregunta al cliente en su app si cambia o quita el producto" @click="askOutOfItem(o)">Producto agotado</button>
+              <button v-if="canAskOutOfItem(o)" type="button" :disabled="extBusy" title="Avisa al cliente en su app de un producto agotado o de una alergia o nota que no puedes cumplir" @click="askOutOfItem(o)">Avisar un problema</button>
+              <button v-if="canAdjustPrice(o)" type="button" :disabled="extBusy" title="Sube o baja el precio del pedido; el cliente lo acepta en su app" @click="askPrice(o)">Cambiar precio</button>
               <button v-if="isLive(o) && !ownDelivery(o)" type="button" :disabled="extBusy" title="Pide a Uber cómo va el pedido" @click="refreshFromUber(o)">Revisar en Uber</button>
               <template v-if="ownDelivery(o)">
                 <button v-if="!o.external.deliveryStatus" type="button" :disabled="extBusy" @click="deliveryStep(o, 'started')">Salió a entregar</button>
@@ -140,6 +147,7 @@
       </div>
 
       <p v-if="extErr" class="err" role="alert">{{ extErr }}</p>
+      <p v-if="extNote" class="ok" role="status">{{ extNote }}</p>
 
       <Teleport to="body">
         <div v-if="denyTarget" class="modal-bg" @click.self="denyTarget = null">
@@ -170,9 +178,14 @@
         </div>
         <div v-if="oosTarget" class="modal-bg" @click.self="oosTarget = null">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="oos-title">
-            <h3 id="oos-title">Producto agotado</h3>
-            <p class="deliver">Uber le pregunta al cliente en su app si lo cambia o lo quita. Mientras responde, el pedido sigue abierto; si no responde, Uber lo cancela.</p>
-            <fieldset class="item-pick">
+            <h3 id="oos-title">Avisar un problema</h3>
+            <p class="deliver">Uber se lo pregunta al cliente en su app para que lo resuelva. Mientras responde, el pedido sigue abierto; si no responde, Uber lo cancela.</p>
+            <label>¿Qué pasa?
+              <select v-model="oosType">
+                <option v-for="t in ISSUE_TYPES" :key="t.code" :value="t.code">{{ t.label }}</option>
+              </select>
+            </label>
+            <fieldset v-if="oosType !== 'CANNOT_FULFILL_MERCHANT_INSTRUCTION'" class="item-pick">
               <legend>¿Cuál producto?</legend>
               <label v-for="i in oosChoices" :key="i.cartItemId" class="pick"><input v-model="oosItem" type="radio" name="oos-item" :value="i.cartItemId" /> {{ i.quantity }}× {{ i.name }}</label>
             </fieldset>
@@ -181,7 +194,31 @@
             </label>
             <div class="modal-actions">
               <button type="button" @click="oosTarget = null">Volver</button>
-              <button type="button" class="btn-primary" :disabled="extBusy || !oosItem" @click="confirmOutOfItem">Preguntar al cliente</button>
+              <button type="button" class="btn-primary" :disabled="extBusy || (!oosItem && oosType !== 'CANNOT_FULFILL_MERCHANT_INSTRUCTION')" @click="confirmOutOfItem">Avisar al cliente</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="priceTarget" class="modal-bg" @click.self="priceTarget = null">
+          <div class="modal" role="dialog" aria-modal="true" aria-labelledby="price-title">
+            <h3 id="price-title">Cambiar el precio</h3>
+            <p class="deliver">El cliente tiene que aceptar el cambio en su app. Uber limita el monto (por defecto 50 pesos). Pon un número negativo para bajar el precio.</p>
+            <label>Monto (pesos)
+              <input v-model.number="priceAmount" type="number" step="0.01" placeholder="Ej. 25 o -10" />
+            </label>
+            <label>Motivo
+              <select v-model="priceReason">
+                <option v-for="r in PRICE_REASONS" :key="r.code" :value="r.code">{{ r.label }}</option>
+              </select>
+            </label>
+            <label v-if="priceReason === 'OTHER'">Explica el motivo
+              <input v-model.trim="priceCustom" type="text" maxlength="150" />
+            </label>
+            <label>IVA incluido en el precio (%)
+              <input v-model.number="priceTax" type="number" min="0" max="60" step="0.01" />
+            </label>
+            <div class="modal-actions">
+              <button type="button" @click="priceTarget = null">Volver</button>
+              <button type="button" class="btn-primary" :disabled="extBusy || !priceAmount || (priceReason === 'OTHER' && !priceCustom)" @click="confirmPrice">Enviar al cliente</button>
             </div>
           </div>
         </div>
@@ -211,6 +248,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { bindLive } from "../live";
 import { useRouter } from "vue-router";
@@ -220,6 +258,7 @@ import UberStoreStatus from "../components/UberStoreStatus.vue";
 import { directPrinting, printCashClose, printOrder, shouldAutoPrint } from "../printing";
 import { usePointTerminal } from "../point";
 import { apiService } from "../apiService";
+import { venueStore } from "../venueStore";
 import {
   channelLabel,
   isAllergyNote,
@@ -252,6 +291,7 @@ const CANCEL_REASONS = [
 ];
 const PREP_OPTIONS = [10, 15, 20, 30, 45];
 const prepMinutes = ref(15);
+const pickupNote = ref(""); // indicaciones para el repartidor al aceptar
 const now = ref(Date.now());
 const tick = setInterval(() => (now.value = Date.now()), 1000);
 const extBusy = ref(false);
@@ -310,7 +350,8 @@ async function acceptExternal(o) {
   extBusy.value = true;
   extErr.value = "";
   try {
-    replaceOrder(await apiService.acceptExternalOrder(o.id, prepMinutes.value));
+    replaceOrder(await apiService.acceptExternalOrder(o.id, prepMinutes.value, pickupNote.value));
+    pickupNote.value = "";
     await loadCash();
   } catch (e) {
     extErr.value = e.response?.data || "No se pudo aceptar el pedido.";
@@ -319,6 +360,7 @@ async function acceptExternal(o) {
     extBusy.value = false;
   }
 }
+const CANCEL_BLOCK = { ORDER_READY: "el pedido ya está listo" };
 const denyItems = ref([]); // productos agotados que se le dicen a Uber al rechazar
 const pickable = (o) => (o?.items || []).filter((i) => i.cartItemId);
 const denyChoices = computed(() => pickable(denyTarget.value));
@@ -340,12 +382,14 @@ async function askCancel(o) {
     } catch {
       cur = o;
     }
-    const c = cur.external?.sync?.cancel;
-    if (c && c.eligible === false) {
-      extErr.value = `Uber no permite cancelar este pedido${c.reason ? `: ${c.reason}` : ""}.`;
-      return;
-    }
     if (isDone(cur) && !servedCancellable(cur)) return;
+    // Pedido ya listo (o que Uber ya no deja cancelar): se pregunta antes y, si se confirma, se intenta; Uber decide
+    const c = cur.external?.sync?.cancel;
+    const ready = cur.status === "ready" || cur.external?.readyNotifiedAt || cur.external?.sync?.preparationStatus === "READY_FOR_HANDOFF";
+    if (ready || (c && c.eligible === false)) {
+      const why = c && c.eligible === false ? `\n\nUber indica que ya no lo deja cancelar (${CANCEL_BLOCK[c.reason] || c.reason || "sin motivo"}). Se intentará de todos modos y Uber decidirá.` : "";
+      if (!(await askConfirm(`Este pedido ya está marcado como listo. ¿Seguro que quieres cancelarlo?${why}`, { title: "El pedido ya está listo", danger: true, confirmText: "Sí, cancelar", cancelText: "No, volver" }))) return;
+    }
   }
   reasonMode.value = "cancel";
   denyCode.value = "OUT_OF_ITEMS";
@@ -367,12 +411,14 @@ function uberReadyText(o) {
   if (e.sync?.preparationStatus === "READY_FOR_HANDOFF") return "Uber confirmó que el pedido está listo para recoger.";
   return e.sync ? "Avisaste a Uber que está listo, pero Uber aún lo muestra en preparación. Usa «Revisar en Uber»." : "Ya le avisaste a Uber que está listo.";
 }
-const canAddPrep = (o) => canMarkReady(o) && !o.external?.readyNotifiedAt && o.external?.sync?.adjustReadyTime?.eligible !== false;
+// Uber deja cambiar la hora de listo una sola vez por pedido
+const canAddPrep = (o) => canMarkReady(o) && !o.external?.readyNotifiedAt && !o.external?.readyAdjusted && o.external?.sync?.adjustReadyTime?.eligible !== false;
 const canAskOutOfItem = (o) =>
   isLive(o) && !o.external?.readyNotifiedAt && !o.external?.askingCustomer && pickable(o).length > 0 && o.external?.sync?.outOfItem?.eligible !== false;
 async function runExternal(call, fallback) {
   extBusy.value = true;
   extErr.value = "";
+  extNote.value = "";
   try {
     replaceOrder(await call());
   } catch (e) {
@@ -382,21 +428,75 @@ async function runExternal(call, fallback) {
     extBusy.value = false;
   }
 }
-const refreshFromUber = (o) => runExternal(() => apiService.syncExternalOrder(o.id), "No se pudo consultar a Uber Eats.");
+// Lo que Uber dice del pedido, en una línea: estado, preparación y lo que ya no permite
+const STATE_TEXT = { OFFERED: "Ofrecido", ACCEPTED: "Aceptado", HANDED_OFF: "Ya lo tiene el repartidor", SUCCEEDED: "Entregado", FAILED: "Cancelado o fallido" };
+const PREP_TEXT = { PREPARING: "En preparación", READY_FOR_HANDOFF: "Listo para recoger", OUT_OF_ITEM_PENDING_CUSTOMER_RESPONSE: "Esperando al cliente por un producto agotado" };
+function uberSummary(o) {
+  const s = o.external?.sync;
+  if (!s) return "";
+  const when = new Date(s.at).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  const no = [s.cancel?.eligible === false && "cancelarlo", s.adjustReadyTime?.eligible === false && "cambiar la hora"].filter(Boolean);
+  const parts = [STATE_TEXT[s.state], PREP_TEXT[s.preparationStatus], no.length && `Uber ya no deja ${no.join(" ni ")}`].filter(Boolean);
+  return `Según Uber (${when}): ${parts.join(" · ") || "sin novedades"}`;
+}
+const extNote = ref("");
+async function refreshFromUber(o) {
+  await runExternal(() => apiService.syncExternalOrder(o.id), "No se pudo consultar a Uber Eats.");
+  const cur = orders.value.find((x) => x.id === o.id);
+  if (!extErr.value) extNote.value = (cur && uberSummary(cur)) || "Uber no dio más datos de este pedido.";
+}
 const addPrep = (o, minutes) => runExternal(() => apiService.setExternalReadyTime(o.id, minutes), "No se pudo cambiar la hora de listo.");
+const ISSUE_TYPES = [
+  { code: "OUT_OF_ITEM", label: "Se agotó un producto" },
+  { code: "CANNOT_FULFILL_ALLERGY_REQUEST", label: "No puedo cumplir la alergia de un producto" },
+  { code: "CANNOT_FULFILL_MERCHANT_INSTRUCTION", label: "No puedo cumplir la nota del pedido" },
+];
+const oosType = ref("OUT_OF_ITEM");
 const oosTarget = ref(null);
 const oosItem = ref("");
 const oosMessage = ref("");
 const oosChoices = computed(() => pickable(oosTarget.value));
 function askOutOfItem(o) {
+  oosType.value = "OUT_OF_ITEM";
   oosItem.value = "";
   oosMessage.value = "";
   oosTarget.value = o;
 }
+// ——— Cambiar el precio de un pedido activo (el cliente lo acepta en su app) ———
+const PRICE_REASONS = [
+  { code: "NEW_ITEM_ADDED", label: "Se agregó un producto" },
+  { code: "REQUESTED_ADD_ONS", label: "El cliente pidió un extra" },
+  { code: "BIGGER_SIZE", label: "El cliente pidió un tamaño mayor" },
+  { code: "ITEM_SOLD_OUT", label: "Se agotó un producto" },
+  { code: "REMOVED_ITEM", label: "Se quitó un producto" },
+  { code: "ADD_ON_UNAVAILABLE", label: "Un extra no está disponible" },
+  { code: "OTHER", label: "Otro motivo" },
+];
+const priceTarget = ref(null);
+const priceAmount = ref(null);
+const priceReason = ref("NEW_ITEM_ADDED");
+const priceCustom = ref("");
+const priceTax = ref(16);
+const canAdjustPrice = (o) => isLive(o) && !o.external?.readyNotifiedAt && !o.external?.priceAdjust;
+function askPrice(o) {
+  priceAmount.value = null;
+  priceReason.value = "NEW_ITEM_ADDED";
+  priceCustom.value = "";
+  priceTax.value = Math.round((Number(venueStore.taxRate) || 0) * 10000) / 100; // el IVA del negocio, en %
+  priceTarget.value = o;
+}
+async function confirmPrice() {
+  const o = priceTarget.value;
+  priceTarget.value = null;
+  await runExternal(
+    () => apiService.adjustExternalPrice(o.id, { amount: priceAmount.value, reason: priceReason.value, customReason: priceCustom.value, taxRate: priceTax.value }),
+    "No se pudo cambiar el precio."
+  );
+}
 async function confirmOutOfItem() {
   const o = oosTarget.value;
   oosTarget.value = null;
-  await runExternal(() => apiService.externalOutOfItem(o.id, oosItem.value, oosMessage.value), "No se pudo avisar del producto agotado.");
+  await runExternal(() => apiService.externalOutOfItem(o.id, oosItem.value, oosMessage.value, oosType.value), "No se pudo avisar del producto agotado.");
 }
 async function deliveryStep(o, status) {
   extBusy.value = true;
@@ -522,7 +622,7 @@ async function openCash() {
 }
 
 async function closeCash() {
-  if (!confirm("¿Cerrar la caja con el efectivo contado?")) return;
+  if (!(await askConfirm("¿Cerrar la caja con el efectivo contado?", { title: "Cerrar caja", confirmText: "Cerrar caja" }))) return;
   cashBusy.value = true;
   cashErr.value = "";
   cashMsg.value = "";
@@ -591,7 +691,7 @@ async function confirmPay() {
     payOrder.value = null;
     await loadCash();
     if (shouldAutoPrint()) printOrder(updated, "receipt");
-    else if (confirm("¿Imprimir cuenta?")) printOrder(updated, "receipt", { auto: true });
+    else if (await askConfirm("¿Imprimir cuenta?", { title: "Pedido cobrado", confirmText: "Imprimir", cancelText: "Ahora no" })) printOrder(updated, "receipt", { auto: true });
   } catch (e) {
     payErr.value = e.response?.data || "No se pudo cobrar";
   } finally {
@@ -642,7 +742,7 @@ onUnmounted(() => {
   background: var(--mirestaurante-panel-elevated);
   color: var(--mirestaurante-ink);
 }
-.toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:1.2rem; gap:1rem; flex-wrap:wrap; }
+.toolbar { display:flex; justify-content:space-between; align-items:center; margin:1.1rem 0 1.2rem; gap:1rem; flex-wrap:wrap; }
 .toolbar p { margin:0; color:var(--mirestaurante-muted); }
 .btn-primary { background:var(--mirestaurante-primary); color:var(--mirestaurante-on-primary); border:none; border-radius:.8rem; padding:.75rem 1.1rem; font-weight:700; text-decoration:none; cursor:pointer; display:inline-block; min-height:3rem; box-shadow:var(--mirestaurante-shadow); }
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
@@ -706,10 +806,14 @@ onUnmounted(() => {
   max-height: min(85vh, 32rem);
   overflow: auto;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.85rem;
+  overflow-x: hidden;
   border: 1px solid var(--mirestaurante-line);
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.2);
 }
+.modal > * { min-width: 0; }
+.modal select, .modal input[type="text"] { width: 100%; max-width: 100%; box-sizing: border-box; }
 .modal h3 {
   margin: 0;
   font-family: var(--font-display);
@@ -765,6 +869,8 @@ onUnmounted(() => {
 .awaiting-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .deliver { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--mirestaurante-muted); line-height: 1.4; }
 .deliver strong { color: var(--mirestaurante-ink); }
+.prep.pickup { display: grid; width: 100%; gap: 0.35rem; }
+.prep.pickup input { width: 100%; box-sizing: border-box; }
 .item-pick { margin: 0; padding: 0.6rem 0.8rem; border: 1px solid var(--mirestaurante-line); border-radius: 0.8rem; display: grid; gap: 0.4rem; }
 .item-pick legend { padding: 0 0.3rem; font-size: 0.85rem; color: var(--mirestaurante-muted); }
 .item-pick .pick { display: flex; align-items: center; gap: 0.5rem; font-size: 0.92rem; }

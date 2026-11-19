@@ -111,15 +111,24 @@ async function fetchOrder(orderId) {
 
 // Los motivos que ve el usuario siguen siendo los nuestros; Uber pide su lista de `type` (el resto de nuestros códigos se llaman igual)
 const DENY_TYPE = { ITEM_AVAILABILITY: 'ITEM_ISSUE' };
+const CANCEL_INFO = {
+  OUT_OF_ITEMS: 'Producto agotado',
+  KITCHEN_CLOSED: 'La cocina cerró',
+  CUSTOMER_CALLED_TO_CANCEL: 'El cliente llamó para cancelar',
+  RESTAURANT_TOO_BUSY: 'El restaurante tiene mucho trabajo',
+  CANNOT_COMPLETE_CUSTOMER_NOTE: 'No se puede cumplir la nota del cliente',
+  OTHER: 'Otro motivo',
+};
 const CANCEL_TYPE = { OUT_OF_ITEMS: 'ITEM_ISSUE', CANNOT_COMPLETE_CUSTOMER_NOTE: 'SPECIAL_INSTRUCTIONS' };
 
-const acceptOrder = (orderId, { externalRef, pickupTime, acceptedBy } = {}) =>
+const acceptOrder = (orderId, { externalRef, pickupTime, acceptedBy, pickupInstructions } = {}) =>
   api(orderPath(orderId, '/accept'), {
     method: 'POST',
     body: {
       ...(pickupTime ? { ready_for_pickup_time: new Date(Math.floor(Number(pickupTime)) * 1000).toISOString() } : {}), // cuándo estará listo
       ...(externalRef ? { external_reference_id: String(externalRef) } : {}),
       ...(acceptedBy ? { accepted_by: String(acceptedBy).slice(0, 100) } : {}),
+      ...(pickupInstructions ? { order_pickup_instructions: String(pickupInstructions).slice(0, 200) } : {}), // para el repartidor
     },
   });
 // `items`: los productos con problema, para que Uber sepa cuáles fueron: [{ id (el de Uber), externalId }]
@@ -137,7 +146,8 @@ const cancelOrder = (orderId, { reason = 'OTHER', details = '' } = {}) => {
   const code = CANCEL_REASONS.includes(reason) ? reason : 'OTHER';
   return api(orderPath(orderId, '/cancel'), {
     method: 'POST',
-    body: { cancellation_reason: { type: CANCEL_TYPE[code] || code, ...(details ? { info: String(details).slice(0, 200) } : {}) } },
+    // Uber exige `info` (texto libre): el detalle que escribió el cajero o, si no, el nombre del motivo
+    body: { cancellation_reason: { type: CANCEL_TYPE[code] || code, info: String(details || CANCEL_INFO[code]).slice(0, 200) } },
   });
 };
 // «Mark Order Ready» (documentado en el openapi): avisa a Uber que el pedido ya está listo para recoger. Cuerpo vacío.
@@ -146,18 +156,35 @@ const markOrderReady = (orderId) => api(orderPath(orderId, '/ready'), { method: 
 // Cambia la hora en que estará listo (solo si el pedido lo permite: `action_eligibility.adjust_ready_for_pickup_time`)
 const updateReadyTime = (orderId, readyAt) => api(orderPath(orderId, '/update-ready-time'), { method: 'POST', body: { ready_for_pickup_time: readyAt.toISOString() } });
 // Producto agotado sin rechazar todo el pedido: Uber le pregunta al cliente si lo cambia, lo quita o cancela (solo restaurantes)
-const askCustomerAboutItem = (orderId, { cartItemId, message = '' }) =>
+const ISSUE_TYPES = ['OUT_OF_ITEM', 'CANNOT_FULFILL_ALLERGY_REQUEST', 'CANNOT_FULFILL_MERCHANT_INSTRUCTION']; // lo que Uber admite para restaurantes
+const askCustomerAboutItem = (orderId, { cartItemId, message = '', issueType = 'OUT_OF_ITEM' }) =>
   api(orderPath(orderId, '/resolve-fulfillment-issues'), {
     method: 'POST',
     body: {
       fulfillment_issues: [{
-        issue_type: 'OUT_OF_ITEM',
+        issue_type: ISSUE_TYPES.includes(issueType) ? issueType : 'OUT_OF_ITEM',
         action_type: 'ASK_CUSTOMER',
-        item: { cart_item_id: String(cartItemId) },
+        ...(cartItemId ? { item: { cart_item_id: String(cartItemId) } } : {}), // la nota del pedido no es de un producto
         ...(message ? { store_response: String(message).slice(0, 200) } : {}),
       }],
     },
   });
+
+// Cambia el precio de un pedido activo (más o menos); el cliente tiene que aceptarlo en su app.
+// Uber limita el monto (por defecto 50 en la moneda local) y en regiones con IVA incluido exige la tasa.
+const ADJUST_REASONS = ['REQUESTED_ADD_ONS', 'BIGGER_SIZE', 'NEW_ITEM_ADDED', 'ITEM_SOLD_OUT', 'REMOVED_ITEM', 'ADD_ON_UNAVAILABLE', 'OTHER'];
+const adjustPrice = (orderId, { amount, taxRate, reason = 'OTHER', customReason = '' }) => {
+  const known = ADJUST_REASONS.includes(reason) ? reason : 'OTHER';
+  return api(orderPath(orderId, '/adjust-price'), {
+    method: 'POST',
+    body: {
+      amount_e5: Math.round(Number(amount) * 100_000),
+      ...(taxRate !== undefined && taxRate !== null && taxRate !== '' ? { tax_rate: String(taxRate) } : {}),
+      reason: known,
+      ...(known === 'OTHER' ? { custom_reason: String(customReason).slice(0, 200) } : {}),
+    },
+  });
+};
 // Solo para pedidos que entrega el propio restaurante (DELIVERY_BY_RESTAURANT)
 const restaurantDeliveryStatus = (orderId, status) =>
   api(`/v1/eats/orders/${encodeURIComponent(orderId)}/restaurantdelivery/status`, { method: 'POST', body: { status }, scope: DELIVERY_SCOPE });
@@ -450,7 +477,7 @@ async function editFromUber(orderId) {
   const now = new Date();
   const updated = await db.UpdateOrder(
     order.id,
-    { items: m.items, subtotal: m.subtotal, tax: m.tax, total: m.total, notes: m.notes, external: { ...order.external, allergy: m.allergy, editedAt: now, askingCustomer: null }, updatedAt: now },
+    { items: m.items, subtotal: m.subtotal, tax: m.tax, total: m.total, notes: m.notes, external: { ...order.external, allergy: m.allergy, editedAt: now, askingCustomer: null, priceAdjust: null }, updatedAt: now },
     order.tenantId
   );
   await inventory.restoreSale({ tenantId: order.tenantId, order, by: 'uber', note: 'Pedido editado por el cliente' });
@@ -470,6 +497,7 @@ function uberStatusOf(u) {
     cancel: eligibility(o.action_eligibility?.cancel),
     adjustReadyTime: eligibility(o.action_eligibility?.adjust_ready_for_pickup_time),
     outOfItem: eligibility(o.action_eligibility?.mark_out_of_item),
+    cannotFulfill: eligibility(o.action_eligibility?.mark_cannot_fulfill),
     canAskCustomer: (o.customers || []).some((c) => c.can_respond_to_fulfillment_issues === true),
     courier: (o.deliveries || [])[0]?.status || null,
     at: new Date(),
@@ -513,6 +541,13 @@ async function handleEvent(ev) {
     if (!order || !status) return { ...info, outcome: 'ignored', detail: 'pedido desconocido' };
     await applyCourier(order, status);
     return { ...info, tenantId: order.tenantId, outcome: 'ok', detail: `repartidor: ${status}` };
+  }
+  if (info.eventType === 'orders.release') {
+    // El repartidor llegó al perímetro del local: el pedido tiene que estar listo ya
+    const order = await db.GetOrderByExternal('uber', info.orderId);
+    if (!order || ['served', 'cancelled'].includes(order.status)) return { ...info, outcome: 'ignored', detail: 'pedido desconocido o ya terminado' };
+    await db.UpdateOrder(order.id, { external: { ...order.external, releaseAt: new Date() }, updatedAt: new Date() }, order.tenantId);
+    return { ...info, tenantId: order.tenantId, outcome: 'ok', detail: 'el repartidor está cerca' };
   }
   if (info.eventType === 'orders.fulfillment_issues.resolved') {
     // El cliente respondió (cambió o quitó el producto agotado): se vuelve a leer el pedido
@@ -660,6 +695,9 @@ module.exports = {
   markOrderReady,
   updateReadyTime,
   askCustomerAboutItem,
+  adjustPrice,
+  ADJUST_REASONS,
+  ISSUE_TYPES,
   syncOrder,
   fetchStatus,
   request: api,

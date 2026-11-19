@@ -51,6 +51,7 @@
 </template>
 
 <script setup>
+import { notify } from "../dialog";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
@@ -120,14 +121,14 @@ async function startCheckout(plan) {
     if (res.mock || !status.value.mpConfigured) {
       await apiService.billingDevActivate(plan, res.preapprovalId);
       await load();
-      alert("Plan activado (modo desarrollo)");
+      await notify("Plan activado (modo desarrollo)", { title: "Plan activado" });
       return;
     }
     const url = res.init_point || res.sandbox_init_point;
     if (url) window.location.href = url;
-    else alert("No se recibió link de Mercado Pago");
+    else await notify("No se recibió el enlace de Mercado Pago.", { title: "No se pudo iniciar el pago" });
   } catch (e) {
-    alert(e.response?.data || "Error al iniciar pago");
+    await notify(e.response?.data || "Error al iniciar el pago.", { title: "No se pudo iniciar el pago" });
   } finally {
     busy.value = false;
   }

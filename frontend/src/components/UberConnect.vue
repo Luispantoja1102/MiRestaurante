@@ -44,6 +44,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { onMounted, ref, watch } from "vue";
 import { apiService } from "../apiService";
 
@@ -66,7 +67,7 @@ async function loadPending() {
 }
 
 async function connect() {
-  if (!confirm("Al conectar, MiRestaurante pasa a recibir y aceptar los pedidos de esa tienda en lugar de la tableta de Uber Eats. ¿Continuar?")) return;
+  if (!(await askConfirm("Al conectar, MiRestaurante pasa a recibir y aceptar los pedidos de esa tienda en lugar de la tableta de Uber Eats. ¿Continuar?", { title: "Conectar la tienda", confirmText: "Conectar" }))) return;
   busy.value = true;
   err.value = "";
   try {
@@ -78,7 +79,7 @@ async function connect() {
 }
 
 async function removeAll() {
-  if (!confirm("Te llevamos a Uber para confirmar. La tienda se quitará por completo de MiRestaurante en Uber Eats. ¿Continuar?")) return;
+  if (!(await askConfirm("Te llevamos a Uber para confirmar. La tienda se quitará por completo de MiRestaurante en Uber Eats. ¿Continuar?", { title: "Quitar la tienda", danger: true, confirmText: "Continuar" }))) return;
   busy.value = true;
   err.value = "";
   try {

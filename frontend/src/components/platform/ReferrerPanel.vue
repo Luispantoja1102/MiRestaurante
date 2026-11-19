@@ -134,6 +134,7 @@
 </template>
 
 <script setup>
+import { askConfirm, askText } from "../../dialog";
 import { computed, onMounted, reactive, ref } from "vue";
 import { apiService } from "../../apiService";
 import { BILLING_NAMES, COMMISSION_STATUS, errorText, fmtDate, money, percent, REFERRER_STATUS } from "./format";
@@ -202,8 +203,8 @@ async function run(fn, done) {
 const save = () => run(() => apiService.platformUpdateReferrer(props.id, { ...form }), "Cambios guardados.");
 const setStatus = (status) => run(() => apiService.platformUpdateReferrer(props.id, { status }), status === "paused" ? "Vendedor pausado: su código ya no sirve." : "Vendedor activo.");
 
-function payOut() {
-  if (!window.confirm(`¿Marcar como pagados ${money(r.value.pending)}?`)) return;
+async function payOut() {
+  if (!(await askConfirm(`¿Marcar como pagados ${money(r.value.pending)}?`, { title: "Registrar pago", confirmText: "Marcar pagado" }))) return;
   return run(async () => {
     const detail = await apiService.platformPayReferrer(props.id, payNote.value);
     payNote.value = "";
@@ -211,8 +212,8 @@ function payOut() {
   });
 }
 
-function voidIt(c) {
-  const reason = window.prompt("Motivo de la anulación", "cobro devuelto");
+async function voidIt(c) {
+  const reason = await askText("Motivo de la anulación", "cobro devuelto", { title: "Anular comisión", confirmText: "Anular" });
   if (reason === null) return;
   return run(() => apiService.platformVoidCommission(c.id, reason));
 }

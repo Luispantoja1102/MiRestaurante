@@ -1,6 +1,7 @@
 // Imprime cuentas, comandas y cortes de caja.
 // Con una térmica configurada en ESTE dispositivo (menú Más → Impresora) sale directo; si no, se abre la vista de impresión
 // del navegador como siempre. Si la térmica falla, se ofrece imprimir con el navegador para no perder el ticket.
+import { askConfirm, notify } from "./dialog";
 import { apiService } from "./apiService";
 import { authStore } from "./authStore";
 import { venueStore } from "./venueStore";
@@ -40,7 +41,7 @@ async function receiptBytes(t, cols, openDrawer) {
 let imageProblem = ""; // por qué la cuenta salió en texto en vez de con diseño (para avisarlo, no esconderlo)
 
 function fallback(error, url) {
-  if (window.confirm(`No se pudo imprimir en la térmica: ${error.message}\n\n¿Imprimir con el navegador?`)) window.open(url, "_blank");
+  askConfirm(`No se pudo imprimir en la térmica: ${error.message}\n\n¿Imprimir con el navegador?`, { title: "No se pudo imprimir", confirmText: "Imprimir con el navegador" }).then((ok) => ok && window.open(url, "_blank"));
   return false;
 }
 
@@ -64,7 +65,7 @@ export async function printOrder(orderOrId, kind = "receipt", { auto = false } =
     imageProblem = "";
     await printBytes(kind === "kitchen" ? buildKitchen(t, { cols }) : await receiptBytes(t, cols, drawer));
     // Ya se imprimió (en texto): se avisa para que se sepa que falta el diseño y por qué
-    if (imageProblem) window.alert(`La cuenta salió en texto porque no se pudo dibujar el diseño:\n${imageProblem}`);
+    if (imageProblem) notify(`La cuenta salió en texto porque no se pudo dibujar el diseño:\n${imageProblem}`, { title: "Cuenta impresa en texto" });
     return true;
   } catch (error) {
     return fallback(error, orderUrl(id, kind, true));

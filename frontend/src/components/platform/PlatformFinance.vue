@@ -103,6 +103,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../../dialog";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { apiService } from "../../apiService";
 import TrendChart from "./TrendChart.vue";
@@ -156,7 +157,7 @@ async function addExpense() {
 }
 
 async function removeExpense(e) {
-  if (!window.confirm(`¿Quitar el gasto «${e.label}»?`)) return;
+  if (!(await askConfirm(`¿Quitar el gasto «${e.label}»?`, { danger: true, confirmText: "Quitar" }))) return;
   try {
     await apiService.platformDeleteExpense(e.id);
     await load();

@@ -365,6 +365,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
@@ -562,7 +563,7 @@ async function revoke(i) {
 }
 
 async function removeInvite(i) {
-  if (!confirm("¿Eliminar invitación?")) return;
+  if (!(await askConfirm("¿Eliminar invitación?", { danger: true, confirmText: "Eliminar" }))) return;
   await apiService.deleteInvite(i.id);
   await loadInvites();
 }
@@ -609,7 +610,7 @@ async function linkUber() {
 }
 
 async function unlinkUber() {
-  if (!confirm("¿Dejar de recibir los pedidos de esta tienda de Uber Eats?")) return;
+  if (!(await askConfirm("¿Dejar de recibir los pedidos de esta tienda de Uber Eats?", { title: "Desvincular la tienda", danger: true, confirmText: "Dejar de recibir" }))) return;
   uber.busy = true;
   uber.error = "";
   try {
@@ -745,7 +746,7 @@ async function renameTerminal(t) {
 }
 
 async function removeTerminal(t) {
-  if (!confirm(`¿Quitar la terminal «${t.name}»? Dejará de recibir cobros desde la plataforma.`)) return;
+  if (!(await askConfirm(`¿Quitar la terminal «${t.name}»? Dejará de recibir cobros desde la plataforma.`, { danger: true, confirmText: "Quitar" }))) return;
   pt.busy = true;
   pt.error = "";
   try {
@@ -759,7 +760,7 @@ async function removeTerminal(t) {
 }
 
 async function disconnectPoint() {
-  if (!confirm("¿Desconectar tu cuenta de Mercado Pago? Las tarjetas se registrarán a mano.")) return;
+  if (!(await askConfirm("¿Desconectar tu cuenta de Mercado Pago? Las tarjetas se registrarán a mano.", { danger: true, confirmText: "Desconectar" }))) return;
   pt.busy = true;
   pt.error = "";
   try {

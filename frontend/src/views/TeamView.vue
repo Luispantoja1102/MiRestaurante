@@ -158,6 +158,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { computed, onMounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
@@ -309,7 +310,7 @@ async function savePassword() {
 }
 
 async function remove(m) {
-  if (!confirm(`¿Eliminar la cuenta de ${m.name} ${m.lastName}? Ya no podrá entrar.`)) return;
+  if (!(await askConfirm(`¿Eliminar la cuenta de ${m.name} ${m.lastName}? Ya no podrá entrar.`, { danger: true, confirmText: "Eliminar" }))) return;
   error.value = "";
   try {
     await apiService.deleteTeamMember(m.id);

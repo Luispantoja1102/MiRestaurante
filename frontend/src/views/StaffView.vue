@@ -64,6 +64,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { onMounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
@@ -127,7 +128,7 @@ async function toggleStatus(w) {
 }
 
 async function remove(w) {
-  if (!confirm(`¿Eliminar a ${w.name} ${w.lastName}?`)) return;
+  if (!(await askConfirm(`¿Eliminar a ${w.name} ${w.lastName}?`, { danger: true, confirmText: "Eliminar" }))) return;
   try {
     await apiService.deleteWaiter(w.cellphone);
     waiters.value = waiters.value.filter((x) => x.cellphone !== w.cellphone);

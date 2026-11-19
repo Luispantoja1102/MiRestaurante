@@ -400,8 +400,8 @@ export const apiService = {
   uberUnlink() {
     return axios.delete('/integrations/uber').then((r) => r.data);
   },
-  acceptExternalOrder(orderId: string, prepMinutes?: number) {
-    return axios.put(`/orders/${orderId}/external/accept`, { prepMinutes }).then((r) => r.data);
+  acceptExternalOrder(orderId: string, prepMinutes?: number, pickupInstructions = '') {
+    return axios.put(`/orders/${orderId}/external/accept`, { prepMinutes, pickupInstructions }).then((r) => r.data);
   },
   cancelExternalOrder(orderId: string, code: string, details = '') {
     return axios.put(`/orders/${orderId}/external/cancel`, { code, details }).then((r) => r.data);
@@ -418,8 +418,11 @@ export const apiService = {
   setExternalReadyTime(orderId: string, addMinutes: number) {
     return axios.put(`/orders/${orderId}/external/ready-time`, { addMinutes }).then((r) => r.data);
   },
-  externalOutOfItem(orderId: string, cartItemId: string, message = '') {
-    return axios.put(`/orders/${orderId}/external/out-of-item`, { cartItemId, message }).then((r) => r.data);
+  externalOutOfItem(orderId: string, cartItemId: string, message = '', issueType = 'OUT_OF_ITEM') {
+    return axios.put(`/orders/${orderId}/external/out-of-item`, { cartItemId, message, issueType }).then((r) => r.data);
+  },
+  adjustExternalPrice(orderId: string, data: { amount: number; reason: string; customReason?: string; taxRate?: number | string }) {
+    return axios.put(`/orders/${orderId}/external/adjust-price`, data).then((r) => r.data);
   },
   changePassword(data: { currentPassword: string; newPassword: string }) {
     return axios.put('/usuarios/password', data).then((r) => r.data);

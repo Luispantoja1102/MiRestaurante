@@ -152,6 +152,7 @@
 </template>
 
 <script setup>
+import { askText } from "../../dialog";
 import { computed, onMounted, reactive, ref } from "vue";
 import { apiService } from "../../apiService";
 import TicketPane from "./TicketPane.vue";
@@ -278,8 +279,8 @@ const removeReferrer = () => run(() => apiService.platformSetTenantReferrer(prop
 
 const save = () => run(() => apiService.platformUpdateTenant(props.id, { ...form }), "Cambios guardados.");
 
-function suspend() {
-  const reason = window.prompt("Motivo de la suspensión", "manual");
+async function suspend() {
+  const reason = await askText("Motivo de la suspensión", "manual", { title: "Suspender negocio", confirmText: "Suspender" });
   if (reason === null) return;
   return run(() => apiService.platformSuspendTenant(props.id, reason || "manual"), "Negocio suspendido.");
 }

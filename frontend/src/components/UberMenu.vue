@@ -42,6 +42,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import { onMounted, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 
@@ -81,7 +82,7 @@ async function publish() {
   const question = m.pricing.enabled
     ? "Esto reemplaza el menú que tienes en Uber Eats por el de MiRestaurante, con los precios ajustados a tu plan. ¿Continuar?"
     : "⚠ Tus precios en Uber Eats NO están ajustados: el menú saldría con los precios de tu local y Uber se quedaría su comisión de tu ganancia.\n\nEsto además reemplaza el menú que tienes en Uber Eats. ¿Publicar de todos modos?";
-  if (!confirm(question)) return;
+  if (!(await askConfirm(question, { title: "Publicar el menú en Uber Eats", confirmText: "Publicar", danger: !m.pricing.enabled }))) return;
   busy.value = true;
   msg.value = "";
   err.value = "";

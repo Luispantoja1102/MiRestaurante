@@ -143,7 +143,7 @@ async function acceptUberOrder(req, res) {
     const now = new Date();
     const pickupAt = prepMinutes ? new Date(now.getTime() + prepMinutes * 60_000) : null;
     try {
-      await uber.acceptOrder(order.external.orderId, { externalRef: order.id, pickupTime: pickupAt && pickupAt.getTime() / 1000, acceptedBy: req.user?.username });
+      await uber.acceptOrder(order.external.orderId, { externalRef: order.id, pickupTime: pickupAt && pickupAt.getTime() / 1000, acceptedBy: req.user?.username, pickupInstructions: String(req.body?.pickupInstructions || '').trim() });
     } catch (err) {
       logApiError(req, order, 'accept', err);
       return uberFail(res, err);
@@ -247,11 +247,20 @@ const servedCancellable = (o) =>
   o.external?.type !== 'DELIVERY_BY_RESTAURANT' && Date.now() - new Date(o.updatedAt || 0).getTime() <= SERVED_CANCEL_MS;
 
 // Uber responde 404 si el pedido ya está en un estado final (cancelado o entregado)
+// Lo que Uber dice que está mal (su mensaje o la descripción del campo), para mostrarlo tal cual
+const uberReason = (err) => {
+  try {
+    const j = JSON.parse(err.detail);
+    return j.metadata?.field_violations?.[0]?.description || j.message || '';
+  } catch {
+    return '';
+  }
+};
 const uberClosed = (res, err) => {
   console.error('[uber]', err.message);
-  return res
-    .status(502)
-    .send(err.status === 404 ? 'Uber Eats ya no permite este cambio (el pedido terminó o fue cancelado). Actualiza la pantalla.' : 'No se pudo contactar a Uber Eats. Intenta de nuevo.');
+  if (err.status === 404) return res.status(502).send('Uber Eats ya no permite este cambio (el pedido terminó o fue cancelado). Actualiza la pantalla.');
+  if (err.status === 400) return res.status(502).send(`Uber Eats no aceptó el cambio${uberReason(err) ? `: ${uberReason(err)}` : ''}`);
+  return res.status(502).send('No se pudo contactar a Uber Eats. Intenta de nuevo.');
 };
 
 async function cancelUberOrder(req, res) {
@@ -265,6 +274,12 @@ async function cancelUberOrder(req, res) {
       await uber.cancelOrder(order.external.orderId, { reason: code, details });
     } catch (err) {
       logApiError(req, order, 'cancel', err);
+      // «El pedido ya no está activo»: Uber ya lo cerró. Se refleja aquí lo que Uber tiene (cancelado o entregado) en vez de dejarlo a medias.
+      if (/no longer active/i.test(err.detail || '')) {
+        const st = await uber.fetchStatus(order.external.orderId).catch(() => null);
+        if (st?.state === 'FAILED') return res.status(200).json(await uber.cancelFromUber(order.external.orderId));
+        if (st?.state === 'SUCCEEDED') return res.status(200).json(await db.UpdateOrder(order.id, { status: 'served', updatedAt: new Date() }, req.tenantId));
+      }
       return uberClosed(res, err);
     }
     const now = new Date();
@@ -309,6 +324,7 @@ async function uberSyncOrder(req, res) {
   }
 }
 
+const ONCE_MSG = 'Uber solo deja cambiar la hora de listo una vez por pedido.';
 // Alarga la hora en que estará listo (+N minutos sobre la que ya se había dicho)
 async function uberReadyTime(req, res) {
   try {
@@ -316,6 +332,7 @@ async function uberReadyTime(req, res) {
     if (!order) return null;
     const ext = order.external;
     if (ext.state !== 'accepted' || !['pending', 'preparing'].includes(order.status) || ext.readyNotifiedAt) return res.status(400).send('Este pedido ya no admite cambiar la hora de listo');
+    if (ext.readyAdjusted) return res.status(400).send(ONCE_MSG);
     const add = Number(req.body?.addMinutes);
     if (!Number.isFinite(add) || add < 1 || add > 60) return res.status(400).send('Elige entre 1 y 60 minutos');
     const can = ext.sync?.adjustReadyTime;
@@ -325,9 +342,14 @@ async function uberReadyTime(req, res) {
       await uber.updateReadyTime(ext.orderId, readyAt);
     } catch (err) {
       logApiError(req, order, 'ready_time', err);
+      if (/ALREADY_ADJUSTED/.test(err.detail || '')) {
+        await db.UpdateOrder(order.id, { external: { ...ext, readyAdjusted: true }, updatedAt: new Date() }, req.tenantId);
+        return res.status(400).send(ONCE_MSG);
+      }
       return uberClosed(res, err);
     }
-    return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, pickupAt: readyAt }, updatedAt: new Date() }, req.tenantId));
+    // Uber deja cambiar la hora de listo una sola vez por pedido
+    return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, pickupAt: readyAt, readyAdjusted: true }, updatedAt: new Date() }, req.tenantId));
   } catch (err) {
     console.error(err);
     return res.status(500).send(err.message || 'Error al cambiar la hora de listo');
@@ -341,24 +363,55 @@ async function uberAskCustomer(req, res) {
     if (!order) return null;
     const ext = order.external;
     if (ext.state !== 'accepted') return res.status(400).send('Este pedido aún no se acepta de verdad');
+    const issueType = uber.ISSUE_TYPES.includes(req.body?.issueType) ? req.body.issueType : 'OUT_OF_ITEM';
     const item = (order.items || []).find((i) => i.cartItemId && i.cartItemId === req.body?.cartItemId);
-    if (!item) return res.status(400).send('Elige el producto que se agotó');
+    // La nota general del pedido no es de un producto; lo demás sí necesita saber cuál
+    if (!item && issueType !== 'CANNOT_FULFILL_MERCHANT_INSTRUCTION') return res.status(400).send('Elige el producto');
     if (ext.askingCustomer) return res.status(400).send('Ya le preguntaste al cliente: espera su respuesta');
-    const can = ext.sync?.outOfItem;
-    if (can && can.eligible === false) return res.status(400).send(`Uber no permite avisar de un producto agotado en este pedido${can.reason ? `: ${can.reason}` : ''}`);
+    const can = issueType === 'OUT_OF_ITEM' ? ext.sync?.outOfItem : ext.sync?.cannotFulfill;
+    if (can && can.eligible === false) return res.status(400).send(`Uber no permite avisar de este problema en este pedido${can.reason ? `: ${can.reason}` : ''}`);
     let answer;
     try {
-      answer = await uber.askCustomerAboutItem(ext.orderId, { cartItemId: item.cartItemId, message: String(req.body?.message || '').trim() });
+      answer = await uber.askCustomerAboutItem(ext.orderId, { cartItemId: item?.cartItemId, issueType, message: String(req.body?.message || '').trim() });
     } catch (err) {
       logApiError(req, order, 'out_of_item', err);
       return uberClosed(res, err);
     }
     const now = new Date();
-    const asking = answer?.should_wait_for_customer_response === false ? null : { cartItemId: item.cartItemId, name: item.name, at: now };
+    const asking = answer?.should_wait_for_customer_response === false ? null : { cartItemId: item?.cartItemId || null, name: item?.name || 'la nota del pedido', issueType, at: now };
     return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, askingCustomer: asking }, updatedAt: now }, req.tenantId));
   } catch (err) {
     console.error(err);
     return res.status(500).send(err.message || 'Error al avisar del producto agotado');
+  }
+}
+
+// Cambia el precio de un pedido activo: el cliente lo acepta o no en su app
+async function uberAdjustPrice(req, res) {
+  try {
+    const order = await loadAccepted(req, res);
+    if (!order) return null;
+    const ext = order.external;
+    if (ext.state !== 'accepted') return res.status(400).send('Este pedido aún no se acepta de verdad');
+    if (ext.priceAdjust) return res.status(400).send('Ya hay un cambio de precio esperando la respuesta del cliente');
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 5000) return res.status(400).send('Escribe un monto distinto de cero (negativo si baja el precio)');
+    const reason = uber.ADJUST_REASONS.includes(req.body?.reason) ? req.body.reason : 'OTHER';
+    const customReason = String(req.body?.customReason || '').trim();
+    if (reason === 'OTHER' && !customReason) return res.status(400).send('Escribe el motivo del cambio de precio');
+    const taxRate = req.body?.taxRate === '' || req.body?.taxRate == null ? undefined : Number(req.body.taxRate);
+    if (taxRate !== undefined && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 60)) return res.status(400).send('La tasa de IVA no es válida');
+    try {
+      await uber.adjustPrice(ext.orderId, { amount, taxRate, reason, customReason });
+    } catch (err) {
+      logApiError(req, order, 'adjust_price', err);
+      return uberClosed(res, err);
+    }
+    const now = new Date();
+    return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, priceAdjust: { amount, reason, customReason, at: now, by: req.user?.username || null } }, updatedAt: now }, req.tenantId));
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send(err.message || 'Error al cambiar el precio');
   }
 }
 
@@ -682,4 +735,4 @@ async function uberSweep(req, res) {
   }
 }
 
-module.exports = { uberHolidays, uberSetHolidays, uberPricing, uberSetPricing, uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder, uberSyncOrder, uberReadyTime, uberAskCustomer };
+module.exports = { uberHolidays, uberSetHolidays, uberPricing, uberSetPricing, uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder, uberSyncOrder, uberReadyTime, uberAskCustomer, uberAdjustPrice };

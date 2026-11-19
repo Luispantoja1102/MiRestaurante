@@ -329,6 +329,7 @@
 </template>
 
 <script setup>
+import { askConfirm } from "../dialog";
 import AppShell from '../components/AppShell.vue';
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
@@ -964,7 +965,7 @@ async function agregarNuevaMesa() {
 
 async function eliminarMesa(mesa) {
   if (!mesa) return;
-  if (!confirm(`¿Eliminar ${mesa.nombre}? Esta acción no se puede deshacer.`)) return;
+  if (!(await askConfirm(`¿Eliminar ${mesa.nombre}? Esta acción no se puede deshacer.`, { danger: true, confirmText: "Eliminar" }))) return;
   busy.value = true;
   try {
     await apiService.deleteTable(mesa.id);

@@ -24,6 +24,8 @@ let prepFails = false;
 const unknownStores = new Set(); // Store IDs que Uber no reconoce para esta aplicación
 let holidayState = { holiday_hours: {} }; // horarios especiales que Uber tiene guardados
 let cancelFails = null;
+let cancelBody = null;
+let readyTimeFails = false;
 const fulfillmentOrders = {};
 let offeredNew = null;
 let readyFails = null; // status con el que falla «marcar listo»
@@ -68,9 +70,10 @@ global.fetch = async (url, opts = {}) => {
   if (/\/v2\/eats\/stores\/[^/]+\/menus$/.test(u) && opts.method === 'PUT') return uberFails ? json(uberFails, { error: 'precio inválido' }) : json(204);
   if (/\/v2\/eats\/stores\/[^/]+\/menus\/items\/[^/]+$/.test(u)) return uberFails ? json(uberFails, {}) : json(204);
   if (/\/v1\/delivery\/order\/[^/]+\/ready$/.test(u)) return readyFails ? json(readyFails, { message: 'no se pudo' }) : json(200, {});
-  if (/\/update-ready-time$/.test(u)) return json(200);
+  if (/\/update-ready-time$/.test(u)) return readyTimeFails ? json(400, { metadata: { field_violations: [{ field: 'ready_for_pickup_time', description: 'Cannot adjust ready_for_pickup_time for order due to: ALREADY_ADJUSTED' }] } }) : json(200);
   if (/\/resolve-fulfillment-issues$/.test(u)) return json(200, { should_wait_for_customer_response: true });
-  if (cancelFails && /\/cancel$/.test(u)) return json(cancelFails, {});
+  if (/\/adjust-price$/.test(u)) return json(200, { tax_rate_applied: true });
+  if (cancelFails && /\/cancel$/.test(u)) return json(cancelFails, cancelBody || {});
   if (/\/v1\/delivery\/order\/[^/]+\/(accept|deny|cancel)$|restaurantdelivery\/status$/.test(u)) return uberFails ? json(uberFails, {}) : json(204);
   return json(500, {});
 };
@@ -383,7 +386,7 @@ test('cancelar un pedido aceptado: pide motivo, avisa a Uber y lo saca del cierr
   const r = await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
   assert.equal(r.status, 200, r.text);
   assert.deepEqual([r.json.status, r.json.paymentStatus, r.json.external.state, r.json.external.cancelReason], ['cancelled', 'refunded', 'canceled', 'OUT_OF_ITEMS']);
-  assert.deepEqual(JSON.parse(lastCall('/o-ggggg7/cancel').body), { cancellation_reason: { type: 'ITEM_ISSUE' } });
+  assert.deepEqual(JSON.parse(lastCall('/o-ggggg7/cancel').body), { cancellation_reason: { type: 'ITEM_ISSUE', info: 'Producto agotado' } }, 'sin detalle, Uber recibe el nombre del motivo en `info`');
   assert.equal(Number((antes - (await platformTotal())).toFixed(2)), o.total, 'el pedido ya no cuenta como cobrado');
   assert.equal((await api.call('PUT', `/orders/${o.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } })).status, 400, 'ya terminó');
 
@@ -398,7 +401,9 @@ test('los seis motivos de cancelación se mandan con el `type` de Uber; uno desc
   const esperado = { OUT_OF_ITEMS: 'ITEM_ISSUE', KITCHEN_CLOSED: 'KITCHEN_CLOSED', CUSTOMER_CALLED_TO_CANCEL: 'CUSTOMER_CALLED_TO_CANCEL', RESTAURANT_TOO_BUSY: 'RESTAURANT_TOO_BUSY', CANNOT_COMPLETE_CUSTOMER_NOTE: 'SPECIAL_INSTRUCTIONS', OTHER: 'OTHER' };
   for (const [reason, type] of Object.entries(esperado)) {
     await svc.cancelOrder('o-motivos', { reason });
-    assert.equal(JSON.parse(lastCall('/o-motivos/cancel').body).cancellation_reason.type, type);
+    const sent = JSON.parse(lastCall('/o-motivos/cancel').body).cancellation_reason;
+    assert.equal(sent.type, type);
+    assert.ok(sent.info, 'Uber exige `info` en toda cancelación');
   }
   await svc.cancelOrder('o-motivos', { reason: 'INVENTADO' });
   assert.equal(JSON.parse(lastCall('/o-motivos/cancel').body).cancellation_reason.type, 'OTHER');
@@ -579,10 +584,55 @@ test('cambiar la hora de listo: se suma a la que ya se dijo y respeta lo que Ube
   assert.ok(Math.abs(new Date(r.json.external.pickupAt).getTime() - (antes + 10 * 60_000)) < 5_000);
   assert.equal(Date.parse(JSON.parse(lastCall('/o-time001/update-ready-time').body).ready_for_pickup_time), new Date(r.json.external.pickupAt).getTime());
 
+  uberOrder('o-time001').external.readyAdjusted = false; // aquí se prueba el permiso que Uber da, no el límite de una vez
   uberOrder('o-time001').external.sync = { adjustReadyTime: { eligible: false, reason: 'ya está listo' } };
   const no = await api.call('PUT', `/orders/${o.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 5 } });
   assert.equal(no.status, 400);
   assert.match(no.text, /ya está listo/);
+});
+
+test('+N min solo funciona una vez: Uber lo permite una sola vez por pedido', async () => {
+  const o = await acceptedNew('o-once001');
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 10 } })).status, 200);
+  assert.equal(uberOrder('o-once001').external.readyAdjusted, true);
+  const llamadas = uberCalls.length;
+  const otra = await api.call('PUT', `/orders/${o.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 10 } });
+  assert.equal(otra.status, 400);
+  assert.match(otra.text, /una vez/);
+  assert.equal(uberCalls.length, llamadas, 'ya no se molesta a Uber');
+
+  // Si Uber lo rechaza por haberse ajustado antes (p. ej. en su tablet), queda marcado igual
+  const p = await acceptedNew('o-once002');
+  readyTimeFails = true;
+  const r = await api.call('PUT', `/orders/${p.id}/external/ready-time`, { token: cashier(), body: { addMinutes: 10 } });
+  readyTimeFails = false;
+  assert.equal(r.status, 400);
+  assert.equal(uberOrder('o-once002').external.readyAdjusted, true);
+});
+
+test('cancelar un pedido que Uber ya cerró: se refleja lo que Uber tiene en vez de dejarlo a medias', async () => {
+  const msg = { code: 'bad_request', message: 'The order is no longer active. This is an invalid operation - could not cancel order.' };
+  const a = await acceptedNew('o-dead001');
+  fulfillmentOrders['o-dead001'] = fulfillment('o-dead001', { state: 'FAILED', failure_info: { reason: 'CANCELED' } });
+  cancelFails = 400;
+  cancelBody = msg;
+  const r = await api.call('PUT', `/orders/${a.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual([r.json.status, r.json.paymentStatus], ['cancelled', 'refunded']);
+
+  const b = await acceptedNew('o-dead002');
+  fulfillmentOrders['o-dead002'] = fulfillment('o-dead002', { state: 'SUCCEEDED' });
+  const s = await api.call('PUT', `/orders/${b.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
+  assert.deepEqual([s.status, s.json.status], [200, 'served']);
+
+  // Un 400 distinto muestra lo que dice Uber
+  const c = await acceptedNew('o-dead003');
+  cancelBody = { code: 'bad_request', message: 'No se puede por otra cosa' };
+  const e = await api.call('PUT', `/orders/${c.id}/external/cancel`, { token: cashier(), body: { code: 'OUT_OF_ITEMS' } });
+  cancelFails = null;
+  cancelBody = null;
+  assert.equal(e.status, 502);
+  assert.match(e.text, /No se puede por otra cosa/);
 });
 
 test('producto agotado: se le pregunta al cliente, no se repite y su respuesta rehace el pedido', async () => {
@@ -615,6 +665,72 @@ test('rechazar por producto agotado le dice a Uber cuáles productos', async () 
   assert.equal(r.status, 200, r.text);
   const sent = JSON.parse(uberCalls.filter((c) => c.url.endsWith('/o-deny001/deny')).pop().body).deny_reason;
   assert.deepEqual(sent, { type: 'ITEM_ISSUE', info: 'Sin leche', item_metadata: { invalid_item: [{ id: 'p-1', type: 'OUT_OF_ITEM', external_id: 'f-latte' }] } });
+});
+
+test('el repartidor está cerca (orders.release): queda marcado en el pedido; uno terminado se ignora', async () => {
+  const o = await acceptedNew('o-rel0001');
+  await hook(JSON.stringify({ event_type: 'orders.release', event_id: 'ev-rel1', meta: { resource_id: 'o-rel0001', user_id: STORE } }));
+  assert.ok(uberOrder('o-rel0001').external.releaseAt);
+  uberOrder('o-rel0001').status = 'served';
+  await hook(JSON.stringify({ event_type: 'orders.release', event_id: 'ev-rel2', meta: { resource_id: 'o-rel0001', user_id: STORE } }));
+  assert.equal(o.id, uberOrder('o-rel0001').id);
+});
+
+test('indicaciones para el repartidor: se mandan al aceptar solo si se escribieron', async () => {
+  fulfillmentOrders['o-pick001'] = fulfillment('o-pick001');
+  await hook(body('orders.notification', 'o-pick001'));
+  const a = uberOrder('o-pick001');
+  await api.call('PUT', `/orders/${a.id}/external/accept`, { token: cashier(), body: { prepMinutes: 15, pickupInstructions: 'Usen el carril de autoservicio' } });
+  assert.equal(JSON.parse(lastCall('/o-pick001/accept').body).order_pickup_instructions, 'Usen el carril de autoservicio');
+  const b = await acceptedNew('o-pick002');
+  assert.equal(JSON.parse(lastCall('/o-pick002/accept').body).order_pickup_instructions, undefined);
+  assert.ok(b.id);
+});
+
+test('no se puede cumplir la alergia o la nota: se avisa al cliente con el tipo de problema que pide Uber', async () => {
+  const o = await acceptedNew('o-cant001');
+  const alergia = await api.call('PUT', `/orders/${o.id}/external/out-of-item`, { token: cashier(), body: { cartItemId: 'ci-1', issueType: 'CANNOT_FULFILL_ALLERGY_REQUEST', message: 'Todo lleva leche' } });
+  assert.equal(alergia.status, 200, alergia.text);
+  const sent = JSON.parse(lastCall('/o-cant001/resolve-fulfillment-issues').body).fulfillment_issues[0];
+  assert.deepEqual([sent.issue_type, sent.action_type, sent.item], ['CANNOT_FULFILL_ALLERGY_REQUEST', 'ASK_CUSTOMER', { cart_item_id: 'ci-1' }]);
+
+  // La nota general del pedido no es de un producto: va sin `item`
+  const p = await acceptedNew('o-cant002');
+  assert.equal((await api.call('PUT', `/orders/${p.id}/external/out-of-item`, { token: cashier(), body: { issueType: 'CANNOT_FULFILL_MERCHANT_INSTRUCTION' } })).status, 200);
+  const nota = JSON.parse(lastCall('/o-cant002/resolve-fulfillment-issues').body).fulfillment_issues[0];
+  assert.deepEqual([nota.issue_type, nota.item], ['CANNOT_FULFILL_MERCHANT_INSTRUCTION', undefined]);
+
+  // Agotado y alergia sí piden el producto; y se respeta el permiso `mark_cannot_fulfill` de Uber
+  const q = await acceptedNew('o-cant003');
+  assert.equal((await api.call('PUT', `/orders/${q.id}/external/out-of-item`, { token: cashier(), body: { issueType: 'OUT_OF_ITEM' } })).status, 400);
+  uberOrder('o-cant003').external.sync = { cannotFulfill: { eligible: false, reason: 'ORDER_READY' } };
+  const no = await api.call('PUT', `/orders/${q.id}/external/out-of-item`, { token: cashier(), body: { cartItemId: 'ci-1', issueType: 'CANNOT_FULFILL_ALLERGY_REQUEST' } });
+  assert.equal(no.status, 400);
+  assert.match(no.text, /ORDER_READY/);
+});
+
+test('cambiar el precio: manda el monto en e5, la tasa y el motivo; valida y espera al cliente', async () => {
+  const o = await acceptedNew('o-adj0001');
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/adjust-price`, { token: cashier(), body: { amount: 0, reason: 'NEW_ITEM_ADDED' } })).status, 400, 'sin monto');
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/adjust-price`, { token: cashier(), body: { amount: 20, reason: 'OTHER' } })).status, 400, 'OTHER pide motivo');
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/adjust-price`, { token: cashier(), body: { amount: 20, reason: 'NEW_ITEM_ADDED', taxRate: 500 } })).status, 400, 'tasa imposible');
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/adjust-price`, { token: tokenFor('x', 'waiter', 't1'), body: { amount: 20 } })).status, 403);
+
+  const r = await api.call('PUT', `/orders/${o.id}/external/adjust-price`, { token: cashier(), body: { amount: 25.5, reason: 'NEW_ITEM_ADDED', taxRate: 16 } });
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(JSON.parse(lastCall('/o-adj0001/adjust-price').body), { amount_e5: 2550000, tax_rate: '16', reason: 'NEW_ITEM_ADDED' });
+  assert.equal(r.json.external.priceAdjust.amount, 25.5);
+  assert.equal((await api.call('PUT', `/orders/${o.id}/external/adjust-price`, { token: cashier(), body: { amount: 5, reason: 'NEW_ITEM_ADDED' } })).status, 400, 'ya hay uno esperando');
+
+  // Bajar el precio: negativo. Con motivo libre
+  const p = await acceptedNew('o-adj0002');
+  await api.call('PUT', `/orders/${p.id}/external/adjust-price`, { token: cashier(), body: { amount: -10, reason: 'OTHER', customReason: 'Descuento por demora' } });
+  assert.deepEqual(JSON.parse(lastCall('/o-adj0002/adjust-price').body), { amount_e5: -1000000, reason: 'OTHER', custom_reason: 'Descuento por demora' });
+
+  // Cuando el cliente responde (el pedido se rehace) el cambio deja de estar pendiente
+  fulfillmentOrders['o-adj0001'] = fulfillment('o-adj0001', { payment: { payment_detail: { order_total: money5(140.5), item_charges: { total: money5(140.5), price_breakdown: [{ cart_item_id: 'ci-1', unit: money5(40) }, { cart_item_id: 'ci-2', unit: money5(35) }] } } } });
+  await hook(body('orders.customer_order_edit', 'o-adj0001'));
+  assert.deepEqual([uberOrder('o-adj0001').external.priceAdjust, uberOrder('o-adj0001').total], [null, 140.5]);
 });
 
 test('pedido programado: se confirma sin cobrar y, al llegar su hora, se vuelve a aceptar', async () => {
@@ -795,13 +911,13 @@ test('la bitácora guarda cada aviso con su resultado y los errores al hablar co
   await hook(body('orders.notification', 'o-lllll1'));
   await hook(body('orders.notification', 'o-lllll1')); // reintento
   await hook(body('orders.notification', 'o-lllll1', 'tienda-desconocida'));
-  await hook(JSON.stringify({ event_type: 'orders.release', meta: { resource_id: 'x', user_id: STORE } }));
+  await hook(JSON.stringify({ event_type: 'orders.evento_nuevo', meta: { resource_id: 'x', user_id: STORE } }));
   await hook(body('orders.notification', 'o-sin-detalle')); // Uber no lo conoce: falla y Uber reintentará
   const last = events().slice(-5).map((e) => [e.eventType, e.outcome, e.detail || '']);
   assert.deepEqual(last[0], ['orders.notification', 'ok', '']);
   assert.deepEqual(last[1], ['orders.notification', 'ignored', 'repetido']);
   assert.deepEqual(last[2], ['orders.notification', 'ignored', 'tienda sin vincular']);
-  assert.deepEqual(last[3], ['orders.release', 'ignored', 'evento no atendido']);
+  assert.deepEqual(last[3], ['orders.evento_nuevo', 'ignored', 'evento no atendido']);
   assert.equal(last[4][1], 'error');
   assert.equal(events().find((e) => e.orderId === 'o-lllll1' && e.outcome === 'ok').tenantId, 't1');
 
