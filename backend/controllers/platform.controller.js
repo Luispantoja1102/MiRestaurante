@@ -869,6 +869,8 @@ async function uberOverview(req, res) {
     const names = new Map(tenants.map((t) => [String(t.id), t.name]));
     const byTenant = new Map();
     for (const o of orders) byTenant.set(o.tenantId, [...(byTenant.get(o.tenantId) || []), o]);
+    // missedOrders se omite a propósito: es la lista de pedidos, no un total
+    // eslint-disable-next-line no-unused-vars
     const strip = ({ missedOrders, ...s }) => s;
     const rows = links.map((l) => ({ tenantId: l.tenantId, name: names.get(l.tenantId) || 'Negocio', storeId: l.storeId, ...strip(uberStats.acceptanceStats(byTenant.get(l.tenantId) || [])) }));
     return res.status(200).json({

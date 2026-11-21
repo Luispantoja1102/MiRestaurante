@@ -165,6 +165,7 @@ test('corte de caja: resumen, diferencia y detalle de tickets', () => {
 test('58 mm: ningún renglón pasa de 32 columnas', () => {
   const t = data.orderTicketData({ ...ORDER, items: [{ name: 'Hamburguesa doble con queso y tocino extra grande', quantity: 3, price: 129.5 }] }, venue, labels);
   const s = text(esc.buildReceipt(t, { cols: 32 }));
+  // eslint-disable-next-line no-control-regex
   for (const line of s.split('\n')) assert.ok(line.replace(/[\x00-\x1f]/g, '').length <= 32 + 8, `renglón corto: «${line.slice(0, 60)}»`);
 });
 

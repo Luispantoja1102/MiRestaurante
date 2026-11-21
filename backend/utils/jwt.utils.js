@@ -13,7 +13,7 @@ const verifyToken = (token) =>{
     try{
         const jwt = token.split(' ')[1];
         return JWT.verify(jwt,secret);
-    }catch(error){
+    }catch{
         return null;
     }
 };

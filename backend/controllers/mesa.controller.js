@@ -13,7 +13,7 @@ const AddMesa = async(req,res)=>{
         if(await service.GetMesaById(value.numero)){
             return res.status(400).send("Mesa ya existe");
         }
-        const result = await service.AddMesa(value);
+        await service.AddMesa(value);
         return res.status(201).send("Mesa creada");
     }catch(err){
         console.error(err);

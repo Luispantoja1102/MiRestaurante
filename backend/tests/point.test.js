@@ -179,6 +179,8 @@ test('varias terminales: cada una con su nombre, y el cobro dice en cuál se hac
 
 test('una conexión de antes (una sola terminal) se sigue leyendo', async () => {
   const conn = state.pointConns.find((c) => c.tenantId === 't1');
+  // terminals se omite a propósito: simula la conexión de antes, con una sola terminal
+  // eslint-disable-next-line no-unused-vars
   const { terminals, ...rest } = conn;
   Object.keys(conn).forEach((k) => delete conn[k]);
   Object.assign(conn, rest, { terminalId: 'T1', terminalLabel: 'CAJA1' });

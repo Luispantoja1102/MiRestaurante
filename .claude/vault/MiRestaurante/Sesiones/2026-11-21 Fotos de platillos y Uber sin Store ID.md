@@ -35,3 +35,7 @@ Subir fotos de los platillos como en MiTiendita (tarjetas de tamaño fijo), que 
 ## Revisión en pantalla (2026-11-21)
 - Con el frontend real y la API simulada en el navegador (sin MongoDB: este entorno no tiene el daemon de Docker): tarjetas 3:2 en Menú y Caja (mostrador), las que no tienen foto quedan compactas; diálogo de recorte 3:2; con una foto de 3000×2000 el asistente guarda un WebP de 1200×800 de ~45 000 caracteres y la vista previa 3:2 se ve bien.
 - Sin probar: subir la foto contra el servidor real y que Uber la descargue (solo en el sandbox de Uber).
+
+## Lint del backend limpio (2026-11-21)
+- Los 5 errores previos eran inofensivos: `result` sin usar (`mesa.controller`), `catch (error)` sin usar (`jwt.utils`) y tres usos intencionales (`missedOrders` y `terminals` que se extraen para omitirlos, y una regex de caracteres de control en `escpos.test`), estos con `eslint-disable-next-line` y su motivo. Sin cambios de comportamiento; 335 pruebas pasan y `eslint` sale limpio.
+- Para correr el lint hay que instalar con `npm ci --include=dev` (`globals` es dependencia de desarrollo).
