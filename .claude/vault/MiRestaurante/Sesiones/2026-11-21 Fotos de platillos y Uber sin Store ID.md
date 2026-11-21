@@ -26,3 +26,8 @@ Subir fotos de los platillos como en MiTiendita (tarjetas de tamaño fijo), que 
 - Foto en **WebP** 1200×800 (con respaldo a JPEG si el navegador no lo crea), ≤ 250 000 caracteres.
 - Menú: una sola traducción `es_mx` (la doc pide una) y `price_info` con `in_store_price` e `in_store_discounted_price` iguales al precio. ⚠️ Esto último se tomó de un resumen de la doc: confirmar en el sandbox.
 - Sin dato en la doc: largo máximo de títulos, URL pública de la foto, duración mínima del horario.
+
+## Actualización: ruta de Store ID eliminada
+- Se borró `PUT /integrations/uber` (`uberLink`) del backend. Ahora la tienda solo se vincula con «Conectar con Uber Eats» (OAuth). Contradicción visible: la nota [[MiRestaurante/Sesiones/2026-11-16 Integración Uber Eats]] y la guía de salida a producción hablan de pegar el Store ID; manda el código.
+- Se conserva la lógica de vínculos `linkedVia: 'manual'` ya guardados (negocios que vincularon antes): se pueden desvincular y no se apagan en Uber.
+- Pruebas: las que vinculaban por la ruta ahora siembran la integración directo; 335 pasan.

@@ -29,7 +29,6 @@ router.get('/uber/connect', requireAuth, requireActiveSubscription, requireFresh
 router.get('/uber/oauth/callback', integrations.uberOAuthCallback); // público: lo abre el navegador al volver de Uber
 router.get('/uber/pending', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberPending);
 router.post('/uber/activate', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberActivate);
-router.put('/uber', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberLink);
 router.delete('/uber', requireAuth, requireActiveSubscription, requireFreshRole('admin'), integrations.uberUnlink);
 
 module.exports = router;

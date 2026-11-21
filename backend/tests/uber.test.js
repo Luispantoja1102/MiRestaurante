@@ -12,6 +12,7 @@ process.env.UBER_EATS_CLIENT_SECRET = 'secreto-de-prueba';
 const SECRET = process.env.UBER_EATS_CLIENT_SECRET;
 
 const { app, state, tokenFor } = loadApp();
+const db = require('../database/mongodb'); // la base simulada de loadApp
 let api;
 const realFetch = global.fetch;
 const uberCalls = [];
@@ -21,7 +22,6 @@ let storeState = { status: 'ONLINE' }; // estado de la tienda en Uber
 let createdOrders = []; // ids que Uber tiene en CREATED (null = Uber falla)
 let storeAvgPrep = 15; // avg_prep_time de la tienda (null = Uber falla al consultarla)
 let prepFails = false;
-const unknownStores = new Set(); // Store IDs que Uber no reconoce para esta aplicación
 let holidayState = { holiday_hours: {} }; // horarios especiales que Uber tiene guardados
 let cancelFails = null;
 let cancelBody = null;
@@ -39,7 +39,6 @@ global.fetch = async (url, opts = {}) => {
   const json = (status, data) => new Response(data === undefined ? null : JSON.stringify(data), { status });
   if (u.includes('/oauth/v2/token')) return json(200, { access_token: 'tk', expires_in: 2592000 });
   if (/\/v1\/eats\/stores\/[^/?]+$/.test(u)) {
-    if (unknownStores.has(decodeURIComponent(u.split('/').pop()))) return json(401, { code: 'unauthorized', message: 'User not allowed to access the store' });
     return storeAvgPrep == null ? json(500, {}) : json(200, { name: 'Tienda', avg_prep_time: storeAvgPrep });
   }
   if (/\/v1\/delivery\/store\/[^/]+\/update-store-prep-time$/.test(u)) return prepFails ? json(404, { message: 'no existe' }) : json(204);
@@ -114,45 +113,14 @@ const sign = (raw, secret = SECRET) => crypto.createHmac('sha256', secret).updat
 const hook = (raw, signature = sign(raw)) =>
   realFetch(`${api.base}/integrations/uber/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(signature ? { 'X-Uber-Signature': signature } : {}) }, body: raw });
 const uberOrder = (id) => state.orders.find((o) => o.external?.orderId === id);
-const link = () => api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId: STORE } });
+// La tienda se vincula solo con «Conectar con Uber Eats» (OAuth, probado en uber-activation.test.js): aquí se parte ya vinculada.
+const linkStore = () => db.SaveIntegration('uber', 't1', { storeId: STORE, linkedVia: 'oauth', storeName: 'Tienda', integrationEnabled: true, deprovisioned: false });
 
-test('vincular la tienda: solo el administrador, con un Store ID válido y que no sea de otro negocio', async () => {
-  assert.equal((await api.call('PUT', '/integrations/uber', { token: cashier(), body: { storeId: STORE } })).status, 403);
-  assert.equal((await api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId: '¿?' } })).status, 400);
-  const ok = await link();
-  assert.equal(ok.status, 200);
-  assert.equal(ok.json.storeId, STORE);
-  const otro = await api.call('PUT', '/integrations/uber', { token: tokenFor('beto', 'admin', 't2'), body: { storeId: STORE } });
-  assert.equal(otro.status, 409);
+test('estado de la integración: tienda vinculada y entorno', async () => {
+  await linkStore();
   const st = await api.call('GET', '/integrations/uber', { token: admin() });
   assert.deepEqual([st.json.configured, st.json.environment, st.json.storeId], [true, 'sandbox', STORE]);
-});
-
-test('vincular con el Store ID: solo si Uber reconoce la tienda para esta aplicación', async () => {
-  const antes = state.integrations.find((i) => i.provider === 'uber' && i.tenantId === 't1');
-  const put = (storeId) => api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId } });
-
-  // Un ID inventado: Uber dice que no tiene acceso, y no queda «vinculada»
-  unknownStores.add('inventada-xyz-123');
-  const mala = await put('inventada-xyz-123');
-  assert.equal(mala.status, 400);
-  assert.match(mala.text, /no reconoce esa tienda/);
-  assert.equal(state.integrations.find((i) => i.provider === 'uber' && i.tenantId === 't1')?.storeId, antes?.storeId, 'la vinculación no cambió');
-  assert.equal((state.uberEvents || []).some((e) => e.eventType === 'api.link' && e.outcome === 'error'), true, 'queda en la bitácora');
-
-  // Uber caído: no se puede verificar, tampoco se vincula
-  storeAvgPrep = null;
-  const caido = await put('tienda-caida-0001');
-  storeAvgPrep = 15;
-  assert.equal(caido.status, 502);
-  assert.match(caido.text, /No se pudo verificar/);
-
-  // Uber la reconoce: se vincula y se guarda su nombre
-  const buena = await put('tienda-real-0002');
-  assert.equal(buena.status, 200, buena.text);
-  assert.deepEqual([buena.json.storeId, buena.json.storeName], ['tienda-real-0002', 'Tienda']);
-  assert.equal(state.integrations.find((i) => i.provider === 'uber' && i.tenantId === 't1').storeName, 'Tienda');
-  await put(STORE); // se deja como las demás pruebas esperan
+  assert.equal((await api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId: STORE } })).status, 404, 'ya no se vincula escribiendo el Store ID');
 });
 
 test('el webhook rechaza lo que no viene firmado por Uber', async () => {

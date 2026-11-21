@@ -5,8 +5,6 @@ const activation = require('../services/uber.activation.service');
 const inventory = require('../services/inventory.service');
 const { todayIn, fromUber, toUber } = require('../utils/holidays');
 
-const STORE_ID = /^[A-Za-z0-9_-]{8,64}$/;
-
 // Cada tipo de aviso tiene su atención; los de pedidos están en uber.service
 const dispatch = (ev) => {
   const type = ev?.event_type;
@@ -52,36 +50,6 @@ async function uberStatus(req, res) {
   } catch (err) {
     console.error(err);
     return res.status(500).send(err.message || 'Error al leer la integración');
-  }
-}
-
-async function uberLink(req, res) {
-  try {
-    const storeId = String(req.body?.storeId || '').trim();
-    if (!STORE_ID.test(storeId)) return res.status(400).send('Escribe el Store ID de Uber Eats (letras, números y guiones)');
-    const taken = await db.GetIntegrationByStore('uber', storeId);
-    if (taken && taken.tenantId !== String(req.tenantId)) {
-      return res.status(409).send('Esa tienda ya está vinculada a otro negocio');
-    }
-    // Se le pregunta a Uber si reconoce esa tienda para esta aplicación: escribir cualquier ID no la vincula
-    let storeName = null;
-    if (uber.isConfigured()) {
-      try {
-        storeName = (await uber.storeDetails(storeId))?.name || null;
-      } catch (err) {
-        uber.recordEvent({ eventType: 'api.link', storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
-        if (/autenticar/i.test(err.message)) return res.status(400).send('Uber Eats no aceptó las credenciales de la aplicación (Client ID y Client Secret) o sus permisos. Revísalos en el panel de Uber.');
-        if ([400, 401, 403, 404].includes(err.status)) {
-          return res.status(400).send('Uber Eats no reconoce esa tienda para tu aplicación. Revisa el Store ID, o usa «Conectar con Uber Eats» con la cuenta dueña de la tienda.');
-        }
-        return res.status(502).send('No se pudo verificar la tienda con Uber Eats. Intenta de nuevo en un momento.');
-      }
-    }
-    const link = await db.SaveIntegration('uber', req.tenantId, { storeId, linkedBy: req.user?.username || null, linkedVia: 'manual', storeName, storeAddress: null, integrationEnabled: null, deprovisioned: false });
-    return res.status(200).json({ configured: uber.isConfigured(), environment: uber.config().env, storeId: link.storeId, storeName: link.storeName || '' });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al vincular la tienda');
   }
 }
 
@@ -735,4 +703,4 @@ async function uberSweep(req, res) {
   }
 }
 
-module.exports = { uberHolidays, uberSetHolidays, uberPricing, uberSetPricing, uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberLink, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder, uberSyncOrder, uberReadyTime, uberAskCustomer, uberAdjustPrice };
+module.exports = { uberHolidays, uberSetHolidays, uberPricing, uberSetPricing, uberRemove, uberPrep, uberSetPrep, uberSetAutoPublish, uberSweep, uberConnect, uberOAuthCallback, uberPending, uberActivate, uberMenuStatus, uberPublishMenu, uberMetrics, uberReconcile, uberStoreStatus, uberSetStoreStatus, uberSetAutoPause, uberWebhook, uberStatus, uberUnlink, acceptUberOrder, denyUberOrder, cancelUberOrder, deliveryStatusUberOrder, uberSyncOrder, uberReadyTime, uberAskCustomer, uberAdjustPrice };

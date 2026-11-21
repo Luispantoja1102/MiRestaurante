@@ -17,6 +17,7 @@ Object.assign(process.env, {
 const SECRET = process.env.UBER_EATS_CLIENT_SECRET;
 
 const { app, state, tokenFor } = loadApp();
+const db = require('../database/mongodb'); // la base simulada de loadApp
 let api;
 const realFetch = global.fetch;
 const uberCalls = [];
@@ -215,7 +216,7 @@ test('desvincular apaga la integración en Uber si la activamos nosotros, y avis
 
 test('quitar la integración del todo: pide autorizar de nuevo y borra la tienda en Uber con el token del comercio', async () => {
   // Una tienda vinculada a mano no se quita desde aquí
-  await api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId: 'store-manual-0002' } });
+  await db.SaveIntegration('uber', 't1', { storeId: 'store-manual-0002', linkedVia: 'manual', deprovisioned: false }); // vinculación vieja, de cuando se escribía el Store ID
   assert.equal((await api.call('POST', '/integrations/uber/remove', { token: admin() })).status, 400);
   await api.call('DELETE', '/integrations/uber', { token: admin() });
 
@@ -259,16 +260,4 @@ test('una intención de quitar vieja no secuestra una conexión nueva', async ()
   assert.deepEqual((await api.call('GET', '/integrations/uber/pending', { token: admin() })).json.stores, []);
   assert.equal((await api.call('POST', '/integrations/uber/activate', { token: admin(), body: { storeId: '99999999-iiii' } })).status, 400);
   await api.call('DELETE', '/integrations/uber', { token: admin() });
-});
-
-test('vincular con el Store ID sigue disponible: Uber la verifica (solo lectura) y no se activa ni se apaga nada', async () => {
-  const antes = uberCalls.length;
-  const r = await api.call('PUT', '/integrations/uber', { token: admin(), body: { storeId: 'store-manual-0001' } });
-  assert.equal(r.status, 200, r.text);
-  assert.deepEqual([integ().linkedVia, integ().storeName, integ().deprovisioned], ['manual', 'Tienda manual', false]);
-  assert.ok(uberCalls.slice(antes).every((c) => c.method === 'GET' && !/pos_data/.test(c.url)), 'solo se leyó la tienda; no se activó nada');
-  const n = uberCalls.length;
-  const del = await api.call('DELETE', '/integrations/uber', { token: admin() });
-  assert.deepEqual([del.status, del.json.deactivated], [200, null]);
-  assert.equal(uberCalls.length, n, 'una tienda vinculada a mano no se apaga en Uber');
 });
