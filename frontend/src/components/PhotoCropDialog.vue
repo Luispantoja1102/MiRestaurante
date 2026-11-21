@@ -145,13 +145,15 @@ function render(w) {
   return canvas;
 }
 
-// JPEG (lo acepta Uber Eats): baja la calidad y luego el tamaño hasta que quepa en MAX_CHARS.
+// WebP (lo acepta Uber Eats y pesa menos); si el navegador no sabe crearlo, devuelve PNG y se usa JPEG.
+// Baja la calidad y luego el tamaño hasta que quepa en MAX_CHARS.
 function compress() {
   let w = Math.round(Math.min(OUT_W, fw.value / s.value)); // nunca agrandar más allá de los pixeles de la foto
   for (let round = 0; round < 4; round++) {
     const canvas = render(w);
     for (const q of [0.85, 0.78, 0.7, 0.62, 0.55]) {
-      const url = canvas.toDataURL("image/jpeg", q);
+      let url = canvas.toDataURL("image/webp", q);
+      if (!url.startsWith("data:image/webp")) url = canvas.toDataURL("image/jpeg", q);
       if (url.length <= MAX_CHARS) return url;
     }
     w = Math.round(w * 0.85);

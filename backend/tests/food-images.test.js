@@ -45,3 +45,10 @@ test('una dirección https normal se conserva y una foto enorme o falsa se recha
   const t = await create('data:text/html;base64,AAAA'); // no es una imagen: se guarda tal cual como texto, nunca se sirve
   assert.equal(t.json.imgUrl, 'data:text/html;base64,AAAA');
 });
+
+test('una foto WebP se guarda y se sirve como image/webp', async () => {
+  reset();
+  const r = await create(`data:image/webp;base64,${Buffer.from('fake-webp').toString('base64')}`);
+  assert.equal(r.status, 201, r.text);
+  assert.equal((await fetch(`${api.base}/foods/${r.json.id}/image`)).headers.get('content-type'), 'image/webp');
+});

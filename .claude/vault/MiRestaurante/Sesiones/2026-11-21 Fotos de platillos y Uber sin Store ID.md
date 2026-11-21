@@ -20,3 +20,9 @@ Subir fotos de los platillos como en MiTiendita (tarjetas de tamaño fijo), que 
 - La ruta `PUT /integrations/uber` (vincular por Store ID) sigue en el backend sin pantalla; se dejó sin tocar.
 - `npm run lint` del backend ya tenía 5 errores previos (mesa, platform, escpos test, point test, jwt).
 - No se vio la pantalla real (necesita MongoDB y sesión): falta revisar a ojo el diálogo de recorte y las tarjetas.
+
+## Actualización (misma fecha): revisión de la documentación de Uber
+- Documentación revisada: referencia «Upload Menu» y guía de integración de menús. `image_url`: JPG, WEBP o PNG, < 25 MB, 320–6000 px por lado; las imágenes pueden tardar hasta unas horas en procesarse. **Se descartó el supuesto de 1080×720**: no existe en la API.
+- Foto en **WebP** 1200×800 (con respaldo a JPEG si el navegador no lo crea), ≤ 250 000 caracteres.
+- Menú: una sola traducción `es_mx` (la doc pide una) y `price_info` con `in_store_price` e `in_store_discounted_price` iguales al precio. ⚠️ Esto último se tomó de un resumen de la doc: confirmar en el sandbox.
+- Sin dato en la doc: largo máximo de títulos, URL pública de la foto, duración mínima del horario.

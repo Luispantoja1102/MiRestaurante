@@ -1033,6 +1033,8 @@ test('el menú se traduce al formato de Uber: centavos, IVA aparte, extras y ago
   assert.deepEqual(item('f1_sirope').tax_info, { tax_rate: 8 }, 'el extra lleva la marca de su platillo');
   assert.ok(item('f1').image_url && !item('f2').image_url, 'solo imágenes con dirección https');
   assert.equal(item('f1').description.translations.es_mx, 'Café');
+  assert.deepEqual(Object.keys(item('f1').description.translations), ['es_mx'], 'Uber pide una sola traducción');
+  assert.deepEqual(item('f1').price_info, { price: 4050, in_store_price: 4050, in_store_discounted_price: 4050 });
   assert.deepEqual(item('f1').modifier_group_ids, { ids: ['f1_extras'] });
   assert.deepEqual(body.modifier_groups[0].modifier_options.map((o) => o.id), ['f1_sirope', 'f1_azucar']);
   assert.equal(body.modifier_groups[0].quantity_info.quantity.max_permitted, 5);

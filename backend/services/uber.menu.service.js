@@ -6,8 +6,8 @@
  * - Un producto (o un extra) está agotado cuando un ingrediente de su receta tiene existencia 0 o menos,
  *   el mismo criterio de las pantallas. Uber lo guarda como «suspendido hasta» una hora; la renovamos al abrir la caja.
  *
- * ⚠️ Formato armado con la referencia de Uber (menú V2); confirmar en el sandbox: claves de idioma, `tax_rate`,
- *    límites de largo y el tope de cantidad de los extras.
+ * Formato revisado contra la referencia de Uber (2026-11-21): una sola traducción `es_mx`, `price_info` con precio en tienda,
+ *    `vat_rate_percentage`/`tax_rate`, fotos JPG/WEBP/PNG de 320 a 6000 px. ⚠️ Sin dato en la doc: largo máximo de títulos.
  */
 const db = require('../database/mongodb');
 const uber = require('./uber.service');
@@ -28,8 +28,10 @@ function httpError(message, status = 400, detail) {
 }
 
 const cents = (n) => Math.round(Number(n || 0) * 100);
-// Uber pide el texto por idioma; se manda en español y en inglés para no depender de cuál lea cada tienda
-const text = (s) => ({ translations: { es_mx: String(s).slice(0, 100), en_us: String(s).slice(0, 100) } });
+// Uber pide el texto por idioma y dice que se mande UNA sola traducción (se muestra a todos): en español de México
+const text = (s) => ({ translations: { es_mx: String(s).slice(0, 100) } });
+// `price_info` pide también el precio en tienda y el descontado; se mandan iguales al precio del menú
+const priceInfo = (price) => ({ price, in_store_price: price, in_store_discounted_price: price });
 const minutes = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3));
 
 /** Ids de Uber (productos y extras) que hoy están agotados. */
@@ -70,7 +72,7 @@ function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DE
         title: text(f.name),
         ...(f.description ? { description: text(f.description) } : {}),
         ...(/^https:\/\//i.test(f.imgUrl || '') ? { image_url: f.imgUrl } : {}), // Uber solo acepta una dirección https
-        price_info: { price: cents(priced(f.price, f)) },
+        price_info: priceInfo(cents(priced(f.price, f))),
         tax_info: taxInfo(includesTax(f.priceIncludesTax)),
         external_data: String(f.id),
         ...(extras.length ? { modifier_group_ids: { ids: [groupId] } } : {}),
@@ -87,7 +89,7 @@ function buildMenu({ foods, menus, ingredients, title, open, close, taxRate = DE
         items.push({
           id: extraItemId(f, e),
           title: text(e.label),
-          price_info: { price: cents(priced(e.price, f)) },
+          price_info: priceInfo(cents(priced(e.price, f))),
           tax_info: taxInfo(includesTax(f.priceIncludesTax)), // el extra lleva la misma marca que su platillo
           quantity_info: { quantity: { min_permitted: 0, max_permitted: Number(e.max || 1) } },
           ...suspended(extraItemId(f, e)),
