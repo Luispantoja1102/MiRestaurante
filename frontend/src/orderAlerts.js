@@ -25,6 +25,18 @@ let repeat = null;
 
 const nameOf = (o) => channelLabel[o.channel] || "La plataforma";
 
+/** A qué pestaña de Caja llevar al usuario: Uber Eats si todos son de Uber, «otras apps» si son de otra, la general si hay mezcla. */
+export function platformSourceOf(orders) {
+  const channels = new Set(orders.map((o) => o.channel || o.external?.provider));
+  if (channels.size !== 1) return null;
+  return channels.has("uber") ? "uber" : "other";
+}
+/** Destino de «Ir a Caja» para estos pedidos. */
+export function platformOrdersTarget(orders) {
+  const origen = platformSourceOf(orders);
+  return origen ? { path: "/orders", query: { origen } } : { path: "/orders" };
+}
+
 function announce(fresh) {
   navigator.vibrate?.([200, 100, 200]);
   beep();
@@ -36,7 +48,11 @@ function announce(fresh) {
           tag: `plat-${o.id}`,
           icon: "/logo.svg",
         });
-        n.onclick = () => window.focus();
+        n.onclick = () => {
+          window.focus();
+          const origen = platformSourceOf([o]);
+          window.location.assign(origen ? `/orders?origen=${origen}` : "/orders"); // el aviso lleva a Caja, en la pestaña de ese pedido
+        };
       } catch {
         // Algunos navegadores solo permiten avisos desde un service worker
       }

@@ -111,6 +111,7 @@
 </template>
 
 <script>
+import { money } from "../format";
 import AppShell from "../components/AppShell.vue";
 import LSidebar from "../components/LSidebar.vue";
 import ProductWizard from "../components/ProductWizard.vue";
@@ -160,9 +161,6 @@ export default {
     // Con el IVA del negocio y la marca «IVA incluido» de cada platillo
     const cartTotal = computed(() => totalsOf(store.platillosSeleccionados).total);
     watch(cartCount, (n) => { if (!n) cartOpen.value = false; });
-
-    const money = (n) =>
-      Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 
     const fetchMenus = async () => {
       try {

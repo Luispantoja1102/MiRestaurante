@@ -448,8 +448,7 @@ async function cancelFromUber(orderId) {
   };
   // Si ya estaba aceptado (cobrado como «Plataforma»), Uber no lo pagará: sale del cierre de caja
   if (order.paymentStatus === 'paid') patch.paymentStatus = 'refunded';
-  const restored = await inventory.restoreSale({ tenantId: order.tenantId, order, by: 'uber' }).catch(() => false);
-  if (restored) patch.stockRestored = true;
+  await inventory.restoreInto(patch, { tenantId: order.tenantId, order, by: 'uber' });
   return db.UpdateOrder(order.id, patch, order.tenantId);
 }
 
@@ -471,7 +470,7 @@ async function reopenScheduled(orderId) {
 /** El cliente cambió el pedido después de pagar (agregó, quitó o cambió cantidades): se actualizan platillos e importes y el inventario. */
 async function editFromUber(orderId) {
   const order = await db.GetOrderByExternal('uber', orderId);
-  if (!order || ['cancelled', 'served'].includes(order.status)) return null;
+  if (!order || isClosed(order)) return null;
   const m = mapOrder(await fetchOrder(orderId));
   const foodsById = await resolveItems(order.tenantId, m.items);
   const now = new Date();
@@ -506,14 +505,17 @@ function uberStatusOf(u) {
 
 // Cuando el repartidor ya recogió el pedido (va hacia el cliente), el pedido se cierra solo. No aplica si lo reparte el restaurante.
 const PICKED_UP = ['EN_ROUTE_TO_DROPOFF', 'ARRIVED_AT_DROPOFF', 'COMPLETED'];
+const isClosed = (order) => ['served', 'cancelled'].includes(order.status); // ya no se atiende
 
-async function applyCourier(order, status) {
+/**
+ * Guarda dónde va el repartidor y, si ya recogió el pedido, lo cierra solo (no si lo reparte el restaurante).
+ * `extra`: más datos para guardar en `external` en el mismo paso.
+ */
+async function applyCourier(order, status, extra = {}) {
   const ext = order.external || {};
   const now = new Date();
-  const patch = { external: { ...ext, courier: { status, at: now } }, updatedAt: now };
-  if (PICKED_UP.includes(status) && ext.state === 'accepted' && ext.type !== 'DELIVERY_BY_RESTAURANT' && !['served', 'cancelled'].includes(order.status)) {
-    patch.status = 'served';
-  }
+  const patch = { external: { ...ext, ...extra, ...(status ? { courier: { status, at: now } } : {}) }, updatedAt: now };
+  if (PICKED_UP.includes(status) && ext.state === 'accepted' && ext.type !== 'DELIVERY_BY_RESTAURANT' && !isClosed(order)) patch.status = 'served';
   return db.UpdateOrder(order.id, patch, order.tenantId);
 }
 
@@ -523,11 +525,7 @@ const fetchStatus = async (orderId) => uberStatusOf(await fetchOrder(orderId));
 async function syncOrder(order) {
   const st = await fetchStatus(order.external.orderId);
   if (!st) return null;
-  const now = new Date();
-  const ext = { ...order.external, sync: st, ...(st.courier ? { courier: { status: st.courier, at: now } } : {}) };
-  const patch = { external: ext, updatedAt: now };
-  if (st.courier && PICKED_UP.includes(st.courier) && ext.state === 'accepted' && ext.type !== 'DELIVERY_BY_RESTAURANT' && !['served', 'cancelled'].includes(order.status)) patch.status = 'served';
-  return db.UpdateOrder(order.id, patch, order.tenantId);
+  return applyCourier(order, st.courier, { sync: st });
 }
 
 /** Atiende un aviso de Uber y dice qué pasó: { eventType, orderId, storeId, tenantId, outcome: 'ok' | 'ignored', detail }. */
@@ -545,7 +543,7 @@ async function handleEvent(ev) {
   if (info.eventType === 'orders.release') {
     // El repartidor llegó al perímetro del local: el pedido tiene que estar listo ya
     const order = await db.GetOrderByExternal('uber', info.orderId);
-    if (!order || ['served', 'cancelled'].includes(order.status)) return { ...info, outcome: 'ignored', detail: 'pedido desconocido o ya terminado' };
+    if (!order || isClosed(order)) return { ...info, outcome: 'ignored', detail: 'pedido desconocido o ya terminado' };
     await db.UpdateOrder(order.id, { external: { ...order.external, releaseAt: new Date() }, updatedAt: new Date() }, order.tenantId);
     return { ...info, tenantId: order.tenantId, outcome: 'ok', detail: 'el repartidor está cerca' };
   }

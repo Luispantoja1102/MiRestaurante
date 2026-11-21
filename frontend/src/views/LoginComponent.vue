@@ -32,6 +32,7 @@
 </template>
 
 <script>
+import { errorText } from "../format";
 import { apiService } from "../apiService";
 import { setSession, homeForRole } from "../authStore";
 import { fetchVenueSettings, isSetupComplete } from "../venueStore";
@@ -64,7 +65,7 @@ export default {
           this.$router.push({ name: homeForRole(res.role) });
         }
       } catch (e) {
-        this.error = typeof e.response?.data === "string" ? e.response.data : "Usuario o contraseña incorrectos";
+        this.error = errorText(e, "Usuario o contraseña incorrectos");
       } finally {
         this.loading = false;
       }

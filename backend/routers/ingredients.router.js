@@ -1,17 +1,16 @@
 const router = require('express').Router();
 const ingredients = require('../controllers/ingredients.controller');
-const { requireAuth, requireActiveSubscription, requireRoles } = require('../middleware/auth.middleware');
+const { guard } = require('../middleware/auth.middleware');
 
 // Ver el inventario: quien vende (para saber qué falta). Cambiarlo: solo el administrador.
-const base = [requireAuth, requireActiveSubscription];
-const read = requireRoles('admin', 'cashier');
-const write = requireRoles('admin');
+const read = guard('admin', 'cashier');
+const write = guard('admin');
 
-router.get('/', ...base, read, ingredients.list);
-router.get('/movements', ...base, write, ingredients.movements);
-router.post('/', ...base, write, ingredients.create);
-router.put('/:id', ...base, write, ingredients.update);
-router.delete('/:id', ...base, write, ingredients.remove);
-router.post('/:id/stock', ...base, write, ingredients.stockOp);
+router.get('/', ...read, ingredients.list);
+router.get('/movements', ...write, ingredients.movements);
+router.post('/', ...write, ingredients.create);
+router.put('/:id', ...write, ingredients.update);
+router.delete('/:id', ...write, ingredients.remove);
+router.post('/:id/stock', ...write, ingredients.stockOp);
 
 module.exports = router;

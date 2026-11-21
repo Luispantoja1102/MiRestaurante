@@ -42,6 +42,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { askConfirm } from "../dialog";
 import { onMounted, reactive, ref } from "vue";
 import { apiService } from "../apiService";
@@ -72,7 +73,7 @@ async function toggleAuto(value) {
     await apiService.uberSetAutoPublish(value);
     m.autoPublish = value;
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar el ajuste.";
+    err.value = errorText(e, "No se pudo guardar el ajuste.");
   } finally {
     busy.value = false;
   }
@@ -91,7 +92,7 @@ async function publish() {
     msg.value = `Menú publicado: ${r.items} productos y extras${r.outOfStock ? `, ${r.outOfStock} agotado(s)` : ""}.`;
     await load();
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo publicar el menú.";
+    err.value = errorText(e, "No se pudo publicar el menú.");
   } finally {
     busy.value = false;
   }

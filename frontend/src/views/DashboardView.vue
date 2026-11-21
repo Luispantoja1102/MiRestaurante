@@ -120,6 +120,7 @@
 </template>
 
 <script setup>
+import { money as formatMoney } from "../format";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { bindLive } from "../live";
 import AppShell from "../components/AppShell.vue";
@@ -164,9 +165,6 @@ const topProducts = computed(() => {
 });
 const recentOrders = computed(() => [...orders.value].slice(0, 8));
 
-function formatMoney(n) {
-  return Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
-}
 function formatTime(d) {
   if (!d) return "";
   return new Date(d).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });

@@ -356,6 +356,7 @@
 </template>
 
 <script setup>
+import { money as taxMoney, errorText } from "../format";
 import { askConfirm } from "../dialog";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -485,7 +486,6 @@ const taxError = computed(() => {
   const v = Number(form.taxPercent);
   return !Number.isFinite(v) || v < 0 || v > 100 ? "La tasa va de 0 a 100%." : "";
 });
-const taxMoney = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 const hasTables = computed(() => focusInfo(form.serviceFocus).mode !== "counter");
 
 const saving = ref(false);
@@ -542,7 +542,7 @@ async function sendInvite() {
     invite.email = "";
     await loadInvites();
   } catch (e) {
-    inviteErr.value = e.response?.data || "No se pudo enviar la invitación.";
+    inviteErr.value = errorText(e, "No se pudo enviar la invitación.");
   } finally {
     inviting.value = false;
   }
@@ -597,7 +597,7 @@ async function unlinkUber() {
       uber.error = "Se desvinculó aquí, pero no pudimos apagarla en Uber Eats. Quita el acceso de MiRestaurante desde Uber Eats Manager o pídelo a tu gerente de Uber; si no, seguirán llegando pedidos que nadie atenderá.";
     }
   } catch (e) {
-    uber.error = e.response?.data || "No se pudo desvincular.";
+    uber.error = errorText(e, "No se pudo desvincular.");
   } finally {
     uber.busy = false;
   }
@@ -684,7 +684,7 @@ async function connectPoint() {
   try {
     window.location.href = (await apiService.pointConnect()).url;
   } catch (e) {
-    pt.error = e.response?.data?.message || "No se pudo iniciar la conexión.";
+    pt.error = errorText(e, "No se pudo iniciar la conexión.");
     pt.busy = false;
   }
 }
@@ -700,7 +700,7 @@ async function pickTerminal() {
     message.value = "Terminal lista para cobrar.";
     messageIsError.value = false;
   } catch (e) {
-    pt.error = e.response?.data?.message || "No se pudo usar esa terminal.";
+    pt.error = errorText(e, "No se pudo usar esa terminal.");
   } finally {
     pt.busy = false;
   }
@@ -713,7 +713,7 @@ async function renameTerminal(t) {
     await apiService.pointRenameTerminal(t.id, pt.names[t.id]);
     await loadPoint();
   } catch (e) {
-    pt.error = e.response?.data?.message || "No se pudo cambiar el nombre.";
+    pt.error = errorText(e, "No se pudo cambiar el nombre.");
   } finally {
     pt.busy = false;
   }
@@ -727,7 +727,7 @@ async function removeTerminal(t) {
     await apiService.pointRemoveTerminal(t.id);
     await loadPoint();
   } catch (e) {
-    pt.error = e.response?.data?.message || "No se pudo quitar la terminal.";
+    pt.error = errorText(e, "No se pudo quitar la terminal.");
   } finally {
     pt.busy = false;
   }
@@ -742,7 +742,7 @@ async function disconnectPoint() {
     pt.pick = "";
     await loadPoint();
   } catch (e) {
-    pt.error = e.response?.data?.message || "No se pudo desconectar.";
+    pt.error = errorText(e, "No se pudo desconectar.");
   } finally {
     pt.busy = false;
   }
@@ -767,7 +767,7 @@ async function changePassword() {
     Object.assign(pass, { current: "", next: "", again: "" });
     passMsg.value = "Contraseña cambiada. Úsala la próxima vez que entres.";
   } catch (e) {
-    passErr.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo cambiar la contraseña.";
+    passErr.value = errorText(e, "No se pudo cambiar la contraseña.");
   } finally {
     changing.value = false;
   }

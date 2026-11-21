@@ -329,6 +329,7 @@
 </template>
 
 <script setup>
+import { money } from "../format";
 import { askConfirm } from "../dialog";
 import AppShell from '../components/AppShell.vue';
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
@@ -506,10 +507,6 @@ const sel = computed(() => mesas.value.find((m) => m.id === selId.value) || null
 const selInfo = computed(() => (sel.value ? info(sel.value) : EMPTY_INFO));
 
 /* —— Formato —— */
-
-function money(n) {
-  return Number(n || 0).toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
-}
 
 function elapsed(since) {
   const min = Math.max(0, Math.floor((now.value - since) / 60000));

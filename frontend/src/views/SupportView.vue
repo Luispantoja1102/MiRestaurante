@@ -65,6 +65,7 @@
 </template>
 
 <script setup>
+import { errorText as message } from "../format";
 import { onMounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
 import { apiService } from "../apiService";
@@ -83,7 +84,6 @@ const draft = reactive({ subject: "", message: "" });
 
 const fmt = (value) =>
   value ? new Date(value).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
-const message = (e, fallback) => (typeof e?.response?.data === "string" && e.response.data) || fallback;
 
 async function load() {
   try {

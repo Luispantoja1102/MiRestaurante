@@ -28,6 +28,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { apiService } from "../apiService";
 
@@ -82,7 +83,7 @@ async function change(status) {
     await apiService.uberSetStoreStatus(status, status === "PAUSED" && minutes.value ? minutes.value : undefined);
     await refresh();
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo cambiar el estado.";
+    err.value = errorText(e, "No se pudo cambiar el estado.");
   } finally {
     busy.value = false;
   }
@@ -105,7 +106,7 @@ async function savePrep() {
     await apiService.uberSetPrep(prep.value);
     prepMsg.value = "Guardado.";
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar el tiempo.";
+    err.value = errorText(e, "No se pudo guardar el tiempo.");
   } finally {
     busy.value = false;
   }
@@ -118,7 +119,7 @@ async function toggleAuto(value) {
     await apiService.uberSetAutoPause(value);
     s.autoPause = value;
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar el ajuste.";
+    err.value = errorText(e, "No se pudo guardar el ajuste.");
   } finally {
     busy.value = false;
   }

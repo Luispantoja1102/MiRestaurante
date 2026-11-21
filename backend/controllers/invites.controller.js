@@ -6,206 +6,177 @@ const jwtCreator = require('../utils/jwt.utils');
 const { TENANT_ROLES } = require('../models/tenant.model');
 const { normalizeRole } = require('../models/roles');
 const { limitsFor, memberLimitError } = require('../models/venueMode');
+const { handle } = require('../utils/handle');
 
-async function list(req, res) {
-  try {
-    return res.status(200).json(await db.GetInvites(req.tenantId));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al listar invitaciones');
+const list = handle('Error al listar invitaciones', async (req, res) => {
+  return res.status(200).json(await db.GetInvites(req.tenantId));
+});
+
+const create = handle('Error al crear invitación', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const role = normalizeRole(req.body?.role) || 'waiter';
+  if (!email || !email.includes('@')) {
+    return res.status(400).send('Email inválido');
   }
-}
-
-async function create(req, res) {
-  try {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    const role = normalizeRole(req.body?.role) || 'waiter';
-    if (!email || !email.includes('@')) {
-      return res.status(400).send('Email inválido');
-    }
-    if (!TENANT_ROLES.includes(role)) {
-      return res.status(400).send('Rol inválido');
-    }
-
-    const limits = limitsFor(await db.GetSettings(req.tenantId));
-    const now = Date.now();
-    const pending = (await db.GetInvites(req.tenantId)).filter(
-      (i) => i.status === 'pending' && (!i.expiresAt || new Date(i.expiresAt).getTime() > now)
-    ).length;
-    const limitError = memberLimitError(limits, role, (await db.CountUsersByTenant(req.tenantId)) + pending);
-    if (limitError) return res.status(400).send(limitError);
-
-    const existingUser = await db.FindUserByEmail(email);
-    if (existingUser && existingUser.tenantId === req.tenantId) {
-      return res.status(400).send('Ya existe un usuario con ese correo en este negocio');
-    }
-
-    const settings = await db.GetSettings(req.tenantId);
-    const token = newToken();
-    const invite = await db.CreateInvite({
-      email,
-      role,
-      token,
-      status: 'pending',
-      tenantId: req.tenantId,
-      invitedBy: req.user?.username || 'admin',
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      createdAt: new Date(),
-    });
-
-    const appUrl = (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '');
-    const inviteUrl = `${appUrl}/invite/${token}`;
-    const mail = await sendInviteEmail({
-      to: email,
-      inviteUrl,
-      role,
-      businessName: settings?.businessName,
-    });
-
-    return res.status(201).json({ ...invite, mail });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al crear invitación');
+  if (!TENANT_ROLES.includes(role)) {
+    return res.status(400).send('Rol inválido');
   }
-}
 
-async function revoke(req, res) {
-  try {
-    const updated = await db.UpdateInvite(
-      req.params.id,
-      { status: 'revoked', updatedAt: new Date() },
-      req.tenantId
-    );
-    if (!updated) return res.status(404).send('Invitación no encontrada');
-    return res.status(200).json(updated);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al revocar invitación');
+  const limits = limitsFor(await db.GetSettings(req.tenantId));
+  const now = Date.now();
+  const pending = (await db.GetInvites(req.tenantId)).filter(
+    (i) => i.status === 'pending' && (!i.expiresAt || new Date(i.expiresAt).getTime() > now)
+  ).length;
+  const limitError = memberLimitError(limits, role, (await db.CountUsersByTenant(req.tenantId)) + pending);
+  if (limitError) return res.status(400).send(limitError);
+
+  const existingUser = await db.FindUserByEmail(email);
+  if (existingUser && existingUser.tenantId === req.tenantId) {
+    return res.status(400).send('Ya existe un usuario con ese correo en este negocio');
   }
-}
 
-async function remove(req, res) {
-  try {
-    const result = await db.DeleteInvite(req.params.id, req.tenantId);
-    if (!result.deletedCount) return res.status(404).send('Invitación no encontrada');
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al eliminar invitación');
+  const settings = await db.GetSettings(req.tenantId);
+  const token = newToken();
+  const invite = await db.CreateInvite({
+    email,
+    role,
+    token,
+    status: 'pending',
+    tenantId: req.tenantId,
+    invitedBy: req.user?.username || 'admin',
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(),
+  });
+
+  const appUrl = (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const inviteUrl = `${appUrl}/invite/${token}`;
+  const mail = await sendInviteEmail({
+    to: email,
+    inviteUrl,
+    role,
+    businessName: settings?.businessName,
+  });
+
+  return res.status(201).json({ ...invite, mail });
+});
+
+const revoke = handle('Error al revocar invitación', async (req, res) => {
+  const updated = await db.UpdateInvite(
+    req.params.id,
+    { status: 'revoked', updatedAt: new Date() },
+    req.tenantId
+  );
+  if (!updated) return res.status(404).send('Invitación no encontrada');
+  return res.status(200).json(updated);
+});
+
+const remove = handle('Error al eliminar invitación', async (req, res) => {
+  const result = await db.DeleteInvite(req.params.id, req.tenantId);
+  if (!result.deletedCount) return res.status(404).send('Invitación no encontrada');
+  return res.status(200).json({ ok: true });
+});
+
+const getByToken = handle('Error al obtener invitación', async (req, res) => {
+  const invite = await db.GetInviteByToken(req.params.token);
+  if (!invite || invite.status !== 'pending') {
+    return res.status(404).send('Invitación no válida');
   }
-}
-
-async function getByToken(req, res) {
-  try {
-    const invite = await db.GetInviteByToken(req.params.token);
-    if (!invite || invite.status !== 'pending') {
-      return res.status(404).send('Invitación no válida');
-    }
-    if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
-      return res.status(410).send('Invitación expirada');
-    }
-    return res.status(200).json({
-      email: invite.email,
-      role: invite.role,
-      expiresAt: invite.expiresAt,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al obtener invitación');
+  if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
+    return res.status(410).send('Invitación expirada');
   }
-}
+  return res.status(200).json({
+    email: invite.email,
+    role: invite.role,
+    expiresAt: invite.expiresAt,
+  });
+});
 
-async function accept(req, res) {
-  try {
-    const { token, name, lastName, username, password, cellphone } = req.body || {};
-    if (!token || !name || !lastName || !username || !password) {
-      return res.status(400).send('Faltan campos requeridos');
-    }
+const accept = handle('Error al aceptar invitación', async (req, res) => {
+  const { token, name, lastName, username, password, cellphone } = req.body || {};
+  if (!token || !name || !lastName || !username || !password) {
+    return res.status(400).send('Faltan campos requeridos');
+  }
 
-    const invite = await db.GetInviteByToken(token);
-    if (!invite || invite.status !== 'pending') {
-      return res.status(404).send('Invitación no válida');
-    }
-    if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
-      return res.status(410).send('Invitación expirada');
-    }
-    if (!invite.tenantId) {
-      return res.status(400).send('Invitación sin tenant');
-    }
+  const invite = await db.GetInviteByToken(token);
+  if (!invite || invite.status !== 'pending') {
+    return res.status(404).send('Invitación no válida');
+  }
+  if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
+    return res.status(410).send('Invitación expirada');
+  }
+  if (!invite.tenantId) {
+    return res.status(400).send('Invitación sin tenant');
+  }
 
-    const existingEmail = await db.FindUserByEmail(invite.email);
-    if (existingEmail) {
-      return res.status(400).send('El correo ya está registrado');
-    }
-    const existingUser = await db.FindUserByUsername(username);
-    if (existingUser) {
-      return res.status(400).send('El usuario ya existe');
-    }
+  const existingEmail = await db.FindUserByEmail(invite.email);
+  if (existingEmail) {
+    return res.status(400).send('El correo ya está registrado');
+  }
+  const existingUser = await db.FindUserByUsername(username);
+  if (existingUser) {
+    return res.status(400).send('El usuario ya existe');
+  }
 
-    const inviteRole = normalizeRole(invite.role);
-    const role = TENANT_ROLES.includes(inviteRole) ? inviteRole : 'waiter';
-    // El negocio pudo pasar a modo Café después de invitar: se vuelve a comprobar al aceptar.
-    const acceptLimitError = memberLimitError(
-      limitsFor(await db.GetSettings(invite.tenantId)),
-      role,
-      await db.CountUsersByTenant(invite.tenantId)
-    );
-    if (acceptLimitError) return res.status(400).send(acceptLimitError);
-    const hashed = await bcrypt.hashPassword(password);
-    await db.CreateUser({
+  const inviteRole = normalizeRole(invite.role);
+  const role = TENANT_ROLES.includes(inviteRole) ? inviteRole : 'waiter';
+  // El negocio pudo pasar a modo Café después de invitar: se vuelve a comprobar al aceptar.
+  const acceptLimitError = memberLimitError(
+    limitsFor(await db.GetSettings(invite.tenantId)),
+    role,
+    await db.CountUsersByTenant(invite.tenantId)
+  );
+  if (acceptLimitError) return res.status(400).send(acceptLimitError);
+  const hashed = await bcrypt.hashPassword(password);
+  await db.CreateUser({
+    name,
+    lastName,
+    email: invite.email,
+    username,
+    password: hashed,
+    cellphone:
+      String(cellphone || '0000000000').replace(/\D/g, '').slice(0, 10) || '0000000000',
+    role,
+    tenantId: invite.tenantId,
+  });
+
+  if (role === 'waiter') {
+    await db.AddWaiter({
       name,
       lastName,
-      email: invite.email,
-      username,
-      password: hashed,
-      cellphone:
-        String(cellphone || '0000000000').replace(/\D/g, '').slice(0, 10) || '0000000000',
-      role,
+      birthDate: new Date(),
+      startDate: new Date(),
+      cellphone: String(cellphone || Date.now())
+        .replace(/\D/g, '')
+        .slice(0, 10)
+        .padEnd(10, '0'),
+      mesa: [],
+      role: 'waiter',
+      workSchedule: 'morning',
+      status: 'rest',
       tenantId: invite.tenantId,
     });
-
-    if (role === 'waiter') {
-      await db.AddWaiter({
-        name,
-        lastName,
-        birthDate: new Date(),
-        startDate: new Date(),
-        cellphone: String(cellphone || Date.now())
-          .replace(/\D/g, '')
-          .slice(0, 10)
-          .padEnd(10, '0'),
-        mesa: [],
-        role: 'waiter',
-        workSchedule: 'morning',
-        status: 'rest',
-        tenantId: invite.tenantId,
-      });
-    }
-
-    await db.UpdateInvite(
-      String(invite.id || invite._id),
-      { status: 'accepted', acceptedAt: new Date() },
-      invite.tenantId
-    );
-
-    const jwt = jwtCreator.generateJWT({
-      userId: username,
-      userRole: role,
-      tenantId: invite.tenantId,
-    });
-
-    return res.status(201).json({
-      ok: true,
-      email: invite.email,
-      token: jwt,
-      role,
-      tenantId: invite.tenantId,
-      username,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al aceptar invitación');
   }
-}
+
+  await db.UpdateInvite(
+    String(invite.id || invite._id),
+    { status: 'accepted', acceptedAt: new Date() },
+    invite.tenantId
+  );
+
+  const jwt = jwtCreator.generateJWT({
+    userId: username,
+    userRole: role,
+    tenantId: invite.tenantId,
+  });
+
+  return res.status(201).json({
+    ok: true,
+    email: invite.email,
+    token: jwt,
+    role,
+    tenantId: invite.tenantId,
+    username,
+  });
+});
 
 module.exports = { list, create, revoke, remove, getByToken, accept };

@@ -63,6 +63,7 @@
 </template>
 
 <script>
+import { money, errorText } from "../format";
 import { store } from "../store";
 import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -148,14 +149,11 @@ export default {
         else msg.value = "Pedido enviado a cocina.";
       } catch (error) {
         msgError.value = true;
-        msg.value = error.response?.data || "No se pudo enviar el pedido. Intenta de nuevo.";
+        msg.value = errorText(error, "No se pudo enviar el pedido. Intenta de nuevo.");
       } finally {
         sending.value = false;
       }
     };
-
-    const money = (cantidad) =>
-      Number(cantidad || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 
     return {
       store,

@@ -163,6 +163,7 @@
 </template>
 
 <script setup>
+import { money, errorText } from "../format";
 import { askConfirm } from "../dialog";
 import { computed, reactive, ref } from "vue";
 import { apiService } from "../apiService";
@@ -185,7 +186,6 @@ const STEPS = [
   { n: 3, label: "Extras" },
   { n: 4, label: "Resumen" },
 ];
-const money = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 
 const photoFile = ref(null);
 function onPhoto(e) {
@@ -295,7 +295,7 @@ async function createIngredient() {
     neu.open = false;
     emit("ingredients-changed");
   } catch (e) {
-    neu.error = typeof e.response?.data === "string" ? e.response.data : "No se pudo crear el ingrediente.";
+    neu.error = errorText(e, "No se pudo crear el ingrediente.");
   } finally {
     neu.saving = false;
   }
@@ -318,7 +318,7 @@ async function save() {
     const saved = props.food ? await apiService.editFood(props.food.id, payload) : await apiService.createFood(payload);
     emit("saved", saved);
   } catch (e) {
-    error.value = typeof e.response?.data === "string" ? e.response.data : "No se pudo guardar el producto.";
+    error.value = errorText(e, "No se pudo guardar el producto.");
   } finally {
     saving.value = false;
   }
@@ -331,7 +331,7 @@ async function remove() {
     await apiService.deleteFood(props.food.id);
     emit("deleted", props.food.id);
   } catch (e) {
-    error.value = typeof e.response?.data === "string" ? e.response.data : "No se pudo eliminar.";
+    error.value = errorText(e, "No se pudo eliminar.");
   } finally {
     saving.value = false;
   }

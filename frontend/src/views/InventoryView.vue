@@ -117,6 +117,7 @@
 </template>
 
 <script setup>
+import { errorText as message } from "../format";
 import { askConfirm } from "../dialog";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
@@ -154,7 +155,6 @@ const barWidth = (i) => {
   return Math.min(100, Math.round((i.stock / (i.minStock * 2)) * 100));
 };
 
-const message = (e, fallback) => (typeof e?.response?.data === "string" && e.response.data ? e.response.data : fallback);
 function flash(text) {
   notice.value = text;
   setTimeout(() => { if (notice.value === text) notice.value = ""; }, 4000);

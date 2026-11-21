@@ -47,6 +47,7 @@
 </template>
 
 <script setup>
+import { errorText as errorOf } from "../format";
 import { computed, onMounted, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 
@@ -64,7 +65,6 @@ const form = reactive({ date: "", mode: "closed", start: "09:00", end: "14:00" }
 const dirty = computed(() => JSON.stringify(days.value) !== saved.value);
 const dateText = (d) => new Date(`${d}T12:00:00`).toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 const periodsText = (d) => d.periods.map((p) => `${p.start} a ${p.end}`).join(" y ");
-const errorOf = (e, fallback) => (typeof e.response?.data === "string" && e.response.data) || fallback;
 
 function apply(data) {
   days.value = data.days;

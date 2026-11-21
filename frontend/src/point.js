@@ -1,10 +1,11 @@
 // Cobro con la terminal de Mercado Pago, compartido por Caja y el mostrador.
 import { reactive, ref } from "vue";
 import { apiService } from "./apiService";
+import { errorText } from "./format";
 
 const PICK_KEY = "mirestaurante_point_terminal";
 const sleep =(ms) => new Promise((r) => setTimeout(r, ms));
-const apiMessage = (e) => e.response?.data?.message || "";
+const apiMessage = (e) => errorText(e, "");
 
 export function usePointTerminal() {
   // ok = hay terminal lista para cobrar; connected = ya conectó su cuenta (aunque la terminal falle hoy)

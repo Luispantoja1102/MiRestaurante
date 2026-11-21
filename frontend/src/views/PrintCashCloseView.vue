@@ -141,6 +141,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import "../ticket.css";
@@ -247,8 +248,7 @@ onMounted(async () => {
       .sort((a, b) => new Date(a.paidAt || a.createdAt) - new Date(b.paidAt || b.createdAt));
     if (route.query.autoprint === "1") setTimeout(() => window.print(), 400);
   } catch (e) {
-    const msg = e?.response?.data;
-    err.value = typeof msg === "string" && msg ? msg : "No se pudo cargar el corte.";
+    err.value = errorText(e, "No se pudo cargar el corte.");
   } finally {
     loading.value = false;
   }

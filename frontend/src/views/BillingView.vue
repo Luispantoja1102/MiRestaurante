@@ -51,6 +51,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { notify } from "../dialog";
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -108,7 +109,7 @@ async function load() {
     status.value = s;
     plans.value = p.plans || [];
   } catch (e) {
-    err.value = e.response?.data?.message || e.response?.data || "No se pudo cargar facturación";
+    err.value = errorText(e, "No se pudo cargar facturación");
   } finally {
     loading.value = false;
   }
@@ -128,7 +129,7 @@ async function startCheckout(plan) {
     if (url) window.location.href = url;
     else await notify("No se recibió el enlace de Mercado Pago.", { title: "No se pudo iniciar el pago" });
   } catch (e) {
-    await notify(e.response?.data || "Error al iniciar el pago.", { title: "No se pudo iniciar el pago" });
+    await notify(errorText(e, "Error al iniciar el pago."), { title: "No se pudo iniciar el pago" });
   } finally {
     busy.value = false;
   }

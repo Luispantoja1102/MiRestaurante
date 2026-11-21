@@ -159,6 +159,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import "../ticket.css";
@@ -247,8 +248,7 @@ onMounted(async () => {
     order.value = await apiService.getOrdersById(String(route.params.id));
     if (route.query.autoprint === "1") setTimeout(() => window.print(), 400);
   } catch (e) {
-    const msg = e?.response?.data;
-    err.value = typeof msg === "string" && msg ? msg : "No se pudo cargar el pedido.";
+    err.value = errorText(e, "No se pudo cargar el pedido.");
   } finally {
     loading.value = false;
   }

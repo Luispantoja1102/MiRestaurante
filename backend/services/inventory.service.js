@@ -45,4 +45,17 @@ async function restoreSale({ tenantId, order, by, note = 'Pedido cancelado' }) {
   return true;
 }
 
-module.exports = { applySale, restoreSale };
+/**
+ * Devuelve el inventario de un pedido que se cierra (cancelado o rechazado) y lo anota en el `patch` que se va a guardar.
+ * Nunca estorba: si algo falla se registra y el pedido se cierra igual.
+ */
+async function restoreInto(patch, { tenantId, order, by, note }) {
+  const restored = await restoreSale({ tenantId, order, by, note }).catch((e) => {
+    console.error('[inventory] no se devolvió el stock:', e.message);
+    return false;
+  });
+  if (restored) patch.stockRestored = true;
+  return patch;
+}
+
+module.exports = { applySale, restoreSale, restoreInto };

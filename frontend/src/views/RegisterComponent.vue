@@ -85,6 +85,7 @@
 </template>
 
 <script>
+import { errorText } from "../format";
 import { apiService } from "../apiService";
 import { setSession } from "../authStore";
 
@@ -173,7 +174,7 @@ export default {
         this.$router.push("/setup");
       } catch (error) {
         this.onError = true;
-        this.Error = error.response?.data || error.message;
+        this.Error = errorText(error, error.message);
         console.error(error);
       }
     },

@@ -1,13 +1,13 @@
 const router = require('express').Router();
 const tables = require('../controllers/tables.controller');
-const { requireAuth, requireActiveSubscription, requireRoles } = require('../middleware/auth.middleware');
+const { guard } = require('../middleware/auth.middleware');
 
-const floorRoles = requireRoles('admin', 'host', 'waiter', 'cashier');
+const floorRoles = guard('admin', 'host', 'waiter', 'cashier');
 
-router.get('/', requireAuth, requireActiveSubscription, floorRoles, tables.list);
-router.get('/:id', requireAuth, requireActiveSubscription, floorRoles, tables.getById);
-router.post('/', requireAuth, requireActiveSubscription, requireRoles('admin', 'host'), tables.create);
-router.put('/:id', requireAuth, requireActiveSubscription, floorRoles, tables.update);
-router.delete('/:id', requireAuth, requireActiveSubscription, requireRoles('admin'), tables.remove);
+router.get('/', ...floorRoles, tables.list);
+router.get('/:id', ...floorRoles, tables.getById);
+router.post('/', ...guard('admin', 'host'), tables.create);
+router.put('/:id', ...floorRoles, tables.update);
+router.delete('/:id', ...guard('admin'), tables.remove);
 
 module.exports = router;

@@ -1,14 +1,14 @@
 const router = require('express').Router();
 const menus = require('../controllers/menus.controller');
-const { requireAuth, requireActiveSubscription, requireRoles } = require('../middleware/auth.middleware');
+const { guard } = require('../middleware/auth.middleware');
 
-const readRoles = requireRoles('admin', 'cashier', 'waiter', 'kitchen');
-const writeRoles = requireRoles('admin');
+const readRoles = guard('admin', 'cashier', 'waiter', 'kitchen');
+const writeRoles = guard('admin');
 
-router.get('/', requireAuth, requireActiveSubscription, readRoles, menus.listMenus);
-router.get('/:id', requireAuth, requireActiveSubscription, readRoles, menus.getMenu);
-router.post('/', requireAuth, requireActiveSubscription, writeRoles, menus.createMenu);
-router.put('/:id', requireAuth, requireActiveSubscription, writeRoles, menus.updateMenu);
-router.delete('/:id', requireAuth, requireActiveSubscription, writeRoles, menus.deleteMenu);
+router.get('/', ...readRoles, menus.listMenus);
+router.get('/:id', ...readRoles, menus.getMenu);
+router.post('/', ...writeRoles, menus.createMenu);
+router.put('/:id', ...writeRoles, menus.updateMenu);
+router.delete('/:id', ...writeRoles, menus.deleteMenu);
 
 module.exports = router;

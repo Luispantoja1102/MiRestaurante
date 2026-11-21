@@ -256,6 +256,7 @@
 </template>
 
 <script setup>
+import { money, errorText } from "../format";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import AppShell from "../components/AppShell.vue";
 import DeliveryFields from "../components/DeliveryFields.vue";
@@ -272,7 +273,6 @@ import { lineGross, taxPercentText, totalsOf, unitGross } from "../pricing";
 
 // El servidor recalcula todo (precios del menú, IVA, total); esto solo muestra lo mismo mientras se arma la cuenta.
 const DELIVERY_FEE = 50; // igual que en el servidor
-const money = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 
 // Notas que se repiten en un café: un toque en vez de escribir
 const QUICK_NOTES = ["Descafeinado", "Sin azúcar", "Extra caliente", "Tibio", "Con hielo", "Sin hielo", "Poca leche"];
@@ -475,7 +475,7 @@ async function openCash() {
     await apiService.openCashSession(Number(openingFloat.value || 0));
     await loadCash();
   } catch (e) {
-    cash.error = typeof e.response?.data === "string" ? e.response.data : "No se pudo abrir la caja";
+    cash.error = errorText(e, "No se pudo abrir la caja");
   } finally {
     cash.busy = false;
   }
@@ -553,7 +553,7 @@ async function confirmPay() {
     await nextTick();
     newSaleBtn.value?.focus?.();
   } catch (e) {
-    const msg = typeof e.response?.data === "string" ? e.response.data : "";
+    const msg = errorText(e, "");
     pay.error = msg || "No se pudo registrar la venta. Revisa la conexión e intenta de nuevo.";
     if (/caja/i.test(msg)) loadCash(); // alguien cerró la caja desde otro dispositivo
   } finally {

@@ -22,6 +22,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { apiService } from "../apiService";
@@ -47,7 +48,7 @@ onMounted(async () => {
   try {
     invite.value = await apiService.getInviteByToken(route.params.token);
   } catch (e) {
-    error.value = e.response?.data || "Invitación no válida o expirada.";
+    error.value = errorText(e, "Invitación no válida o expirada.");
   } finally {
     loading.value = false;
   }
@@ -77,7 +78,7 @@ async function accept() {
       setTimeout(() => router.push("/login"), 1200);
     }
   } catch (e) {
-    error.value = e.response?.data || "No se pudo aceptar la invitación.";
+    error.value = errorText(e, "No se pudo aceptar la invitación.");
   } finally {
     saving.value = false;
   }

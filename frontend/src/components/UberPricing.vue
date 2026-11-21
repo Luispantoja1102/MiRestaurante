@@ -79,6 +79,7 @@
 </template>
 
 <script setup>
+import { money, errorText } from "../format";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { apiService } from "../apiService";
 
@@ -98,7 +99,6 @@ const busy = ref(false);
 const msg = ref("");
 const err = ref("");
 
-const money = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 const snapshot = () => JSON.stringify([form.enabled, form.plan, Number(form.commissionPct), Number(form.marketingPct), form.rounding]);
 const dirty = computed(() => snapshot() !== saved.value);
 const planLabel = computed(() => plans.value[form.plan]?.label || "");
@@ -158,7 +158,7 @@ watch(
         highIncrease.value = p.highIncrease;
         err.value = "";
       } catch (e) {
-        err.value = (typeof e.response?.data === "string" && e.response.data) || "Revisa los porcentajes.";
+        err.value = errorText(e, "Revisa los porcentajes.");
       }
     }, 250);
   }
@@ -173,7 +173,7 @@ async function save() {
     emit("saved"); // el bloque del menú vuelve a leer si los precios están ajustados
     msg.value = form.enabled ? "Guardado. El menú se actualiza en Uber Eats con los precios nuevos." : "Guardado: el menú sale con tus precios normales.";
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo guardar.";
+    err.value = errorText(e, "No se pudo guardar.");
   } finally {
     busy.value = false;
   }

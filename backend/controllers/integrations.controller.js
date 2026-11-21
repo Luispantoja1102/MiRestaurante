@@ -4,6 +4,7 @@ const uberMenu = require('../services/uber.menu.service');
 const activation = require('../services/uber.activation.service');
 const inventory = require('../services/inventory.service');
 const { todayIn, fromUber, toUber } = require('../utils/holidays');
+const { handle } = require('../utils/handle');
 
 // Cada tipo de aviso tiene su atención; los de pedidos están en uber.service
 const dispatch = (ev) => {
@@ -30,47 +31,37 @@ async function uberWebhook(req, res) {
   }
 }
 
-async function uberStatus(req, res) {
-  try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    const cfg = uber.config();
-    return res.status(200).json({
-      configured: uber.isConfigured(),
-      environment: cfg.env,
-      oauth: activation.isOAuthConfigured(),
-      storeId: link?.storeId || '',
-      storeName: link?.storeName || '',
-      storeAddress: link?.storeAddress || '',
-      linkedVia: link?.linkedVia || (link?.storeId ? 'manual' : ''),
-      integrationEnabled: link?.integrationEnabled ?? null,
-      deprovisioned: !!link?.deprovisioned,
-      linkedAt: link?.updatedAt || null,
-      autoPause: link?.autoPause !== false,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer la integración');
-  }
-}
+const uberStatus = handle('Error al leer la integración', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  const cfg = uber.config();
+  return res.status(200).json({
+    configured: uber.isConfigured(),
+    environment: cfg.env,
+    oauth: activation.isOAuthConfigured(),
+    storeId: link?.storeId || '',
+    storeName: link?.storeName || '',
+    storeAddress: link?.storeAddress || '',
+    linkedVia: link?.linkedVia || (link?.storeId ? 'manual' : ''),
+    integrationEnabled: link?.integrationEnabled ?? null,
+    deprovisioned: !!link?.deprovisioned,
+    linkedAt: link?.updatedAt || null,
+    autoPause: link?.autoPause !== false,
+  });
+});
 
-async function uberUnlink(req, res) {
-  try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    // Una tienda que activamos nosotros sigue mandando pedidos que nadie atendería: se apaga en Uber (si se puede)
-    let deactivated = null;
-    if (link?.storeId && link.linkedVia === 'oauth' && !link.deprovisioned) {
-      deactivated = await activation.deactivate(link.storeId).then(() => true, (err) => {
-        uber.recordEvent({ eventType: 'api.deactivate', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
-        return false;
-      });
-    }
-    await db.DeleteIntegration('uber', req.tenantId);
-    return res.status(200).json({ storeId: '', deactivated });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al desvincular la tienda');
+const uberUnlink = handle('Error al desvincular la tienda', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  // Una tienda que activamos nosotros sigue mandando pedidos que nadie atendería: se apaga en Uber (si se puede)
+  let deactivated = null;
+  if (link?.storeId && link.linkedVia === 'oauth' && !link.deprovisioned) {
+    deactivated = await activation.deactivate(link.storeId).then(() => true, (err) => {
+      uber.recordEvent({ eventType: 'api.deactivate', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+      return false;
+    });
   }
-}
+  await db.DeleteIntegration('uber', req.tenantId);
+  return res.status(200).json({ storeId: '', deactivated });
+});
 
 // —— Aceptar o rechazar un pedido que llegó de Uber Eats
 async function loadAwaiting(req, res) {
@@ -95,100 +86,89 @@ const uberFail = (res, err) => {
     .send(expired ? 'Uber Eats ya no acepta este pedido (venció o fue cancelado). Actualiza la pantalla.' : 'No se pudo contactar a Uber Eats. Intenta de nuevo.');
 };
 
-async function acceptUberOrder(req, res) {
-  try {
-    const order = await loadAwaiting(req, res);
-    if (!order) return null;
-    // Igual que una venta de mostrador: lo cobrado entra en el cierre de la caja abierta
-    // Pedido programado, primera vez: solo se confirma. Uber lo vuelve a pedir a su hora y entonces se acepta de verdad (se cobra y pasa a cocina)
-    const firstRound = Boolean(order.external.scheduled) && !order.external.acceptedAt;
-    const session = await db.GetOpenCashSession(req.tenantId);
-    if (!session && !firstRound) return res.status(400).send('Abre la caja antes de aceptar el pedido');
+const acceptUberOrder = handle('Error al aceptar el pedido', async (req, res) => {
+  const order = await loadAwaiting(req, res);
+  if (!order) return null;
+  // Igual que una venta de mostrador: lo cobrado entra en el cierre de la caja abierta
+  // Pedido programado, primera vez: solo se confirma. Uber lo vuelve a pedir a su hora y entonces se acepta de verdad (se cobra y pasa a cocina)
+  const firstRound = Boolean(order.external.scheduled) && !order.external.acceptedAt;
+  const session = await db.GetOpenCashSession(req.tenantId);
+  if (!session && !firstRound) return res.status(400).send('Abre la caja antes de aceptar el pedido');
 
-    // «Listo en N minutos»: Uber lo usa para mandar al repartidor a tiempo
-    const prep = Number(req.body?.prepMinutes);
-    const prepMinutes = !firstRound && Number.isFinite(prep) && prep >= 1 && prep <= 180 ? Math.round(prep) : null;
-    const now = new Date();
-    const pickupAt = prepMinutes ? new Date(now.getTime() + prepMinutes * 60_000) : null;
-    try {
-      await uber.acceptOrder(order.external.orderId, { externalRef: order.id, pickupTime: pickupAt && pickupAt.getTime() / 1000, acceptedBy: req.user?.username, pickupInstructions: String(req.body?.pickupInstructions || '').trim() });
-    } catch (err) {
-      logApiError(req, order, 'accept', err);
-      return uberFail(res, err);
-    }
-    if (firstRound) {
-      const scheduled = await db.UpdateOrder(
-        order.id,
-        { external: { ...order.external, state: 'scheduled', acceptedAt: now, acceptedBy: req.user?.username || null }, updatedAt: now },
-        req.tenantId
-      );
-      return res.status(200).json(scheduled);
-    }
-    // Queda «En preparación» hasta que alguien lo marque listo (en Cocina o con «Listo para recoger» en Caja): eso es lo que
-    // le avisa a Uber que ya puede mandar al repartidor.
-    const updated = await db.UpdateOrder(
+  // «Listo en N minutos»: Uber lo usa para mandar al repartidor a tiempo
+  const prep = Number(req.body?.prepMinutes);
+  const prepMinutes = !firstRound && Number.isFinite(prep) && prep >= 1 && prep <= 180 ? Math.round(prep) : null;
+  const now = new Date();
+  const pickupAt = prepMinutes ? new Date(now.getTime() + prepMinutes * 60_000) : null;
+  try {
+    await uber.acceptOrder(order.external.orderId, { externalRef: order.id, pickupTime: pickupAt && pickupAt.getTime() / 1000, acceptedBy: req.user?.username, pickupInstructions: String(req.body?.pickupInstructions || '').trim() });
+  } catch (err) {
+    logApiError(req, order, 'accept', err);
+    return uberFail(res, err);
+  }
+  if (firstRound) {
+    const scheduled = await db.UpdateOrder(
       order.id,
-      {
-        status: 'preparing',
-        paymentStatus: 'paid',
-        paymentMethod: 'platform',
-        paidAt: now,
-        cashSessionId: session.id,
-        external: { ...order.external, state: 'accepted', acceptedAt: now, acceptedBy: req.user?.username || null, ...(pickupAt ? { pickupAt } : {}) },
-        updatedAt: now,
-      },
+      { external: { ...order.external, state: 'scheduled', acceptedAt: now, acceptedBy: req.user?.username || null }, updatedAt: now },
       req.tenantId
     );
-    return res.status(200).json(updated);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al aceptar el pedido');
+    return res.status(200).json(scheduled);
   }
-}
+  // Queda «En preparación» hasta que alguien lo marque listo (en Cocina o con «Listo para recoger» en Caja): eso es lo que
+  // le avisa a Uber que ya puede mandar al repartidor.
+  const updated = await db.UpdateOrder(
+    order.id,
+    {
+      status: 'preparing',
+      paymentStatus: 'paid',
+      paymentMethod: 'platform',
+      paidAt: now,
+      cashSessionId: session.id,
+      external: { ...order.external, state: 'accepted', acceptedAt: now, acceptedBy: req.user?.username || null, ...(pickupAt ? { pickupAt } : {}) },
+      updatedAt: now,
+    },
+    req.tenantId
+  );
+  return res.status(200).json(updated);
+});
 
 const DENY_TO_CANCEL = { ITEM_AVAILABILITY: 'OUT_OF_ITEMS', CAPACITY: 'RESTAURANT_TOO_BUSY', STORE_CLOSED: 'KITCHEN_CLOSED', SPECIAL_INSTRUCTIONS: 'CANNOT_COMPLETE_CUSTOMER_NOTE' };
 
-async function denyUberOrder(req, res) {
+const denyUberOrder = handle('Error al rechazar el pedido', async (req, res) => {
+  const order = await loadAwaiting(req, res);
+  if (!order) return null;
   try {
-    const order = await loadAwaiting(req, res);
-    if (!order) return null;
-    try {
-      // Si el motivo es un producto agotado, se le dice a Uber cuál(es)
-      const chosen = Array.isArray(req.body?.itemIds) ? req.body.itemIds : [];
-      const items = req.body?.code === 'ITEM_AVAILABILITY'
-        ? (order.items || []).filter((i) => i.uberItemId && chosen.includes(i.cartItemId)).map((i) => ({ id: i.uberItemId, externalId: i.foodId }))
-        : [];
-      await uber.denyOrder(order.external.orderId, {
-        code: req.body?.code,
-        explanation: String(req.body?.explanation || '').trim() || 'No se puede preparar',
-        items,
-      });
-    } catch (err) {
-      logApiError(req, order, 'deny', err);
-      return uberFail(res, err);
-    }
-    const now = new Date();
-    const patch = {
-      status: 'cancelled',
-      external: { ...order.external, state: 'denied', closedAt: now, deniedBy: req.user?.username || null },
-      updatedAt: now,
-    };
-    // Uber puede dejar el pedido rechazado en la tablet: se intenta también cancelarlo ahí (si no se puede, queda «Cancelar en Uber»)
-    const explanation = String(req.body?.explanation || '').trim();
-    try {
-      await uber.cancelOrder(order.external.orderId, { reason: DENY_TO_CANCEL[req.body?.code] || 'OTHER', details: explanation });
-      patch.external = { ...patch.external, uberCanceledAt: now, cancelReason: DENY_TO_CANCEL[req.body?.code] || 'OTHER' };
-    } catch (err) {
-      logApiError(req, order, 'cancel', err);
-    }
-    const restored = await inventory.restoreSale({ tenantId: req.tenantId, order, by: req.user?.username }).catch(() => false);
-    if (restored) patch.stockRestored = true;
-    return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+    // Si el motivo es un producto agotado, se le dice a Uber cuál(es)
+    const chosen = Array.isArray(req.body?.itemIds) ? req.body.itemIds : [];
+    const items = req.body?.code === 'ITEM_AVAILABILITY'
+      ? (order.items || []).filter((i) => i.uberItemId && chosen.includes(i.cartItemId)).map((i) => ({ id: i.uberItemId, externalId: i.foodId }))
+      : [];
+    await uber.denyOrder(order.external.orderId, {
+      code: req.body?.code,
+      explanation: String(req.body?.explanation || '').trim() || 'No se puede preparar',
+      items,
+    });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al rechazar el pedido');
+    logApiError(req, order, 'deny', err);
+    return uberFail(res, err);
   }
-}
+  const now = new Date();
+  const patch = {
+    status: 'cancelled',
+    external: { ...order.external, state: 'denied', closedAt: now, deniedBy: req.user?.username || null },
+    updatedAt: now,
+  };
+  // Uber puede dejar el pedido rechazado en la tablet: se intenta también cancelarlo ahí (si no se puede, queda «Cancelar en Uber»)
+  const explanation = String(req.body?.explanation || '').trim();
+  try {
+    await uber.cancelOrder(order.external.orderId, { reason: DENY_TO_CANCEL[req.body?.code] || 'OTHER', details: explanation });
+    patch.external = { ...patch.external, uberCanceledAt: now, cancelReason: DENY_TO_CANCEL[req.body?.code] || 'OTHER' };
+  } catch (err) {
+    logApiError(req, order, 'cancel', err);
+  }
+  await inventory.restoreInto(patch, { tenantId: req.tenantId, order, by: req.user?.username });
+  return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+});
 
 // —— Pedido ya aceptado: cancelarlo o avisar cómo va la entrega
 async function loadAccepted(req, res, allowServed = false) {
@@ -231,240 +211,194 @@ const uberClosed = (res, err) => {
   return res.status(502).send('No se pudo contactar a Uber Eats. Intenta de nuevo.');
 };
 
-async function cancelUberOrder(req, res) {
+const cancelUberOrder = handle('Error al cancelar el pedido', async (req, res) => {
+  const order = await loadAccepted(req, res, true);
+  if (!order) return null;
+  const code = uber.CANCEL_REASONS.includes(req.body?.code) ? req.body.code : 'OTHER';
+  const details = String(req.body?.details || '').trim();
+  if (code === 'OTHER' && !details) return res.status(400).send('Escribe el motivo de la cancelación');
   try {
-    const order = await loadAccepted(req, res, true);
-    if (!order) return null;
-    const code = uber.CANCEL_REASONS.includes(req.body?.code) ? req.body.code : 'OTHER';
-    const details = String(req.body?.details || '').trim();
-    if (code === 'OTHER' && !details) return res.status(400).send('Escribe el motivo de la cancelación');
-    try {
-      await uber.cancelOrder(order.external.orderId, { reason: code, details });
-    } catch (err) {
-      logApiError(req, order, 'cancel', err);
-      // «El pedido ya no está activo»: Uber ya lo cerró. Se refleja aquí lo que Uber tiene (cancelado o entregado) en vez de dejarlo a medias.
-      if (/no longer active/i.test(err.detail || '')) {
-        const st = await uber.fetchStatus(order.external.orderId).catch(() => null);
-        if (st?.state === 'FAILED') return res.status(200).json(await uber.cancelFromUber(order.external.orderId));
-        if (st?.state === 'SUCCEEDED') return res.status(200).json(await db.UpdateOrder(order.id, { status: 'served', updatedAt: new Date() }, req.tenantId));
-      }
-      return uberClosed(res, err);
-    }
-    const now = new Date();
-    if (order.external.state === 'denied') {
-      // Ya estaba cancelado aquí (inventario devuelto): solo queda registrado que Uber también lo canceló
-      const done = { ...order.external, uberCanceledAt: now, canceledBy: req.user?.username || null, cancelReason: code };
-      return res.status(200).json(await db.UpdateOrder(order.id, { external: done, updatedAt: now }, req.tenantId));
-    }
-    const patch = {
-      status: 'cancelled',
-      // Ya no se cobra a Uber: sale del cierre de caja
-      paymentStatus: order.paymentStatus === 'paid' ? 'refunded' : order.paymentStatus,
-      external: { ...order.external, state: 'canceled', closedAt: now, canceledBy: req.user?.username || null, cancelReason: code },
-      updatedAt: now,
-    };
-    const restored = await inventory.restoreSale({ tenantId: req.tenantId, order, by: req.user?.username }).catch(() => false);
-    if (restored) patch.stockRestored = true;
-    return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+    await uber.cancelOrder(order.external.orderId, { reason: code, details });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al cancelar el pedido');
+    logApiError(req, order, 'cancel', err);
+    // «El pedido ya no está activo»: Uber ya lo cerró. Se refleja aquí lo que Uber tiene (cancelado o entregado) en vez de dejarlo a medias.
+    if (/no longer active/i.test(err.detail || '')) {
+      const st = await uber.fetchStatus(order.external.orderId).catch(() => null);
+      if (st?.state === 'FAILED') return res.status(200).json(await uber.cancelFromUber(order.external.orderId));
+      if (st?.state === 'SUCCEEDED') return res.status(200).json(await db.UpdateOrder(order.id, { status: 'served', updatedAt: new Date() }, req.tenantId));
+    }
+    return uberClosed(res, err);
   }
-}
+  const now = new Date();
+  if (order.external.state === 'denied') {
+    // Ya estaba cancelado aquí (inventario devuelto): solo queda registrado que Uber también lo canceló
+    const done = { ...order.external, uberCanceledAt: now, canceledBy: req.user?.username || null, cancelReason: code };
+    return res.status(200).json(await db.UpdateOrder(order.id, { external: done, updatedAt: now }, req.tenantId));
+  }
+  const patch = {
+    status: 'cancelled',
+    // Ya no se cobra a Uber: sale del cierre de caja
+    paymentStatus: order.paymentStatus === 'paid' ? 'refunded' : order.paymentStatus,
+    external: { ...order.external, state: 'canceled', closedAt: now, canceledBy: req.user?.username || null, cancelReason: code },
+    updatedAt: now,
+  };
+  await inventory.restoreInto(patch, { tenantId: req.tenantId, order, by: req.user?.username });
+  return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+});
 
 // —— Lo que Uber dice del pedido: si ya lo ve listo, qué acciones permite y dónde va el repartidor
-async function uberSyncOrder(req, res) {
+const uberSyncOrder = handle('Error al consultar a Uber Eats', async (req, res) => {
+  const order = await db.GetOrderById(req.params.id, req.tenantId);
+  if (!order || order.external?.provider !== 'uber') return res.status(404).send('Pedido no encontrado');
+  let updated;
   try {
-    const order = await db.GetOrderById(req.params.id, req.tenantId);
-    if (!order || order.external?.provider !== 'uber') return res.status(404).send('Pedido no encontrado');
-    let updated;
-    try {
-      updated = await uber.syncOrder(order);
-    } catch (err) {
-      logApiError(req, order, 'sync', err);
-      return uberClosed(res, err);
-    }
-    if (!updated) return res.status(502).send('Uber Eats no dio el estado de este pedido.');
-    return res.status(200).json(updated);
+    updated = await uber.syncOrder(order);
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al consultar a Uber Eats');
+    logApiError(req, order, 'sync', err);
+    return uberClosed(res, err);
   }
-}
+  if (!updated) return res.status(502).send('Uber Eats no dio el estado de este pedido.');
+  return res.status(200).json(updated);
+});
 
 const ONCE_MSG = 'Uber solo deja cambiar la hora de listo una vez por pedido.';
 // Alarga la hora en que estará listo (+N minutos sobre la que ya se había dicho)
-async function uberReadyTime(req, res) {
+const uberReadyTime = handle('Error al cambiar la hora de listo', async (req, res) => {
+  const order = await loadAccepted(req, res);
+  if (!order) return null;
+  const ext = order.external;
+  if (ext.state !== 'accepted' || !['pending', 'preparing'].includes(order.status) || ext.readyNotifiedAt) return res.status(400).send('Este pedido ya no admite cambiar la hora de listo');
+  if (ext.readyAdjusted) return res.status(400).send(ONCE_MSG);
+  const add = Number(req.body?.addMinutes);
+  if (!Number.isFinite(add) || add < 1 || add > 60) return res.status(400).send('Elige entre 1 y 60 minutos');
+  const can = ext.sync?.adjustReadyTime;
+  if (can && can.eligible === false) return res.status(400).send(`Uber no permite cambiar la hora de este pedido${can.reason ? `: ${can.reason}` : ''}`);
+  const readyAt = new Date(Math.max(Date.now(), new Date(ext.pickupAt || 0).getTime()) + Math.round(add) * 60_000);
   try {
-    const order = await loadAccepted(req, res);
-    if (!order) return null;
-    const ext = order.external;
-    if (ext.state !== 'accepted' || !['pending', 'preparing'].includes(order.status) || ext.readyNotifiedAt) return res.status(400).send('Este pedido ya no admite cambiar la hora de listo');
-    if (ext.readyAdjusted) return res.status(400).send(ONCE_MSG);
-    const add = Number(req.body?.addMinutes);
-    if (!Number.isFinite(add) || add < 1 || add > 60) return res.status(400).send('Elige entre 1 y 60 minutos');
-    const can = ext.sync?.adjustReadyTime;
-    if (can && can.eligible === false) return res.status(400).send(`Uber no permite cambiar la hora de este pedido${can.reason ? `: ${can.reason}` : ''}`);
-    const readyAt = new Date(Math.max(Date.now(), new Date(ext.pickupAt || 0).getTime()) + Math.round(add) * 60_000);
-    try {
-      await uber.updateReadyTime(ext.orderId, readyAt);
-    } catch (err) {
-      logApiError(req, order, 'ready_time', err);
-      if (/ALREADY_ADJUSTED/.test(err.detail || '')) {
-        await db.UpdateOrder(order.id, { external: { ...ext, readyAdjusted: true }, updatedAt: new Date() }, req.tenantId);
-        return res.status(400).send(ONCE_MSG);
-      }
-      return uberClosed(res, err);
-    }
-    // Uber deja cambiar la hora de listo una sola vez por pedido
-    return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, pickupAt: readyAt, readyAdjusted: true }, updatedAt: new Date() }, req.tenantId));
+    await uber.updateReadyTime(ext.orderId, readyAt);
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al cambiar la hora de listo');
+    logApiError(req, order, 'ready_time', err);
+    if (/ALREADY_ADJUSTED/.test(err.detail || '')) {
+      await db.UpdateOrder(order.id, { external: { ...ext, readyAdjusted: true }, updatedAt: new Date() }, req.tenantId);
+      return res.status(400).send(ONCE_MSG);
+    }
+    return uberClosed(res, err);
   }
-}
+  // Uber deja cambiar la hora de listo una sola vez por pedido
+  return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, pickupAt: readyAt, readyAdjusted: true }, updatedAt: new Date() }, req.tenantId));
+});
 
 // Un producto se agotó: se le pregunta al cliente en su app si lo cambia o lo quita (sin rechazar todo el pedido)
-async function uberAskCustomer(req, res) {
+const uberAskCustomer = handle('Error al avisar del producto agotado', async (req, res) => {
+  const order = await loadAccepted(req, res);
+  if (!order) return null;
+  const ext = order.external;
+  if (ext.state !== 'accepted') return res.status(400).send('Este pedido aún no se acepta de verdad');
+  const issueType = uber.ISSUE_TYPES.includes(req.body?.issueType) ? req.body.issueType : 'OUT_OF_ITEM';
+  const item = (order.items || []).find((i) => i.cartItemId && i.cartItemId === req.body?.cartItemId);
+  // La nota general del pedido no es de un producto; lo demás sí necesita saber cuál
+  if (!item && issueType !== 'CANNOT_FULFILL_MERCHANT_INSTRUCTION') return res.status(400).send('Elige el producto');
+  if (ext.askingCustomer) return res.status(400).send('Ya le preguntaste al cliente: espera su respuesta');
+  const can = issueType === 'OUT_OF_ITEM' ? ext.sync?.outOfItem : ext.sync?.cannotFulfill;
+  if (can && can.eligible === false) return res.status(400).send(`Uber no permite avisar de este problema en este pedido${can.reason ? `: ${can.reason}` : ''}`);
+  let answer;
   try {
-    const order = await loadAccepted(req, res);
-    if (!order) return null;
-    const ext = order.external;
-    if (ext.state !== 'accepted') return res.status(400).send('Este pedido aún no se acepta de verdad');
-    const issueType = uber.ISSUE_TYPES.includes(req.body?.issueType) ? req.body.issueType : 'OUT_OF_ITEM';
-    const item = (order.items || []).find((i) => i.cartItemId && i.cartItemId === req.body?.cartItemId);
-    // La nota general del pedido no es de un producto; lo demás sí necesita saber cuál
-    if (!item && issueType !== 'CANNOT_FULFILL_MERCHANT_INSTRUCTION') return res.status(400).send('Elige el producto');
-    if (ext.askingCustomer) return res.status(400).send('Ya le preguntaste al cliente: espera su respuesta');
-    const can = issueType === 'OUT_OF_ITEM' ? ext.sync?.outOfItem : ext.sync?.cannotFulfill;
-    if (can && can.eligible === false) return res.status(400).send(`Uber no permite avisar de este problema en este pedido${can.reason ? `: ${can.reason}` : ''}`);
-    let answer;
-    try {
-      answer = await uber.askCustomerAboutItem(ext.orderId, { cartItemId: item?.cartItemId, issueType, message: String(req.body?.message || '').trim() });
-    } catch (err) {
-      logApiError(req, order, 'out_of_item', err);
-      return uberClosed(res, err);
-    }
-    const now = new Date();
-    const asking = answer?.should_wait_for_customer_response === false ? null : { cartItemId: item?.cartItemId || null, name: item?.name || 'la nota del pedido', issueType, at: now };
-    return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, askingCustomer: asking }, updatedAt: now }, req.tenantId));
+    answer = await uber.askCustomerAboutItem(ext.orderId, { cartItemId: item?.cartItemId, issueType, message: String(req.body?.message || '').trim() });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al avisar del producto agotado');
+    logApiError(req, order, 'out_of_item', err);
+    return uberClosed(res, err);
   }
-}
+  const now = new Date();
+  const asking = answer?.should_wait_for_customer_response === false ? null : { cartItemId: item?.cartItemId || null, name: item?.name || 'la nota del pedido', issueType, at: now };
+  return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, askingCustomer: asking }, updatedAt: now }, req.tenantId));
+});
 
 // Cambia el precio de un pedido activo: el cliente lo acepta o no en su app
-async function uberAdjustPrice(req, res) {
+const uberAdjustPrice = handle('Error al cambiar el precio', async (req, res) => {
+  const order = await loadAccepted(req, res);
+  if (!order) return null;
+  const ext = order.external;
+  if (ext.state !== 'accepted') return res.status(400).send('Este pedido aún no se acepta de verdad');
+  if (ext.priceAdjust) return res.status(400).send('Ya hay un cambio de precio esperando la respuesta del cliente');
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 5000) return res.status(400).send('Escribe un monto distinto de cero (negativo si baja el precio)');
+  const reason = uber.ADJUST_REASONS.includes(req.body?.reason) ? req.body.reason : 'OTHER';
+  const customReason = String(req.body?.customReason || '').trim();
+  if (reason === 'OTHER' && !customReason) return res.status(400).send('Escribe el motivo del cambio de precio');
+  const taxRate = req.body?.taxRate === '' || req.body?.taxRate == null ? undefined : Number(req.body.taxRate);
+  if (taxRate !== undefined && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 60)) return res.status(400).send('La tasa de IVA no es válida');
   try {
-    const order = await loadAccepted(req, res);
-    if (!order) return null;
-    const ext = order.external;
-    if (ext.state !== 'accepted') return res.status(400).send('Este pedido aún no se acepta de verdad');
-    if (ext.priceAdjust) return res.status(400).send('Ya hay un cambio de precio esperando la respuesta del cliente');
-    const amount = Number(req.body?.amount);
-    if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 5000) return res.status(400).send('Escribe un monto distinto de cero (negativo si baja el precio)');
-    const reason = uber.ADJUST_REASONS.includes(req.body?.reason) ? req.body.reason : 'OTHER';
-    const customReason = String(req.body?.customReason || '').trim();
-    if (reason === 'OTHER' && !customReason) return res.status(400).send('Escribe el motivo del cambio de precio');
-    const taxRate = req.body?.taxRate === '' || req.body?.taxRate == null ? undefined : Number(req.body.taxRate);
-    if (taxRate !== undefined && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 60)) return res.status(400).send('La tasa de IVA no es válida');
-    try {
-      await uber.adjustPrice(ext.orderId, { amount, taxRate, reason, customReason });
-    } catch (err) {
-      logApiError(req, order, 'adjust_price', err);
-      return uberClosed(res, err);
-    }
-    const now = new Date();
-    return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, priceAdjust: { amount, reason, customReason, at: now, by: req.user?.username || null } }, updatedAt: now }, req.tenantId));
+    await uber.adjustPrice(ext.orderId, { amount, taxRate, reason, customReason });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al cambiar el precio');
+    logApiError(req, order, 'adjust_price', err);
+    return uberClosed(res, err);
   }
-}
+  const now = new Date();
+  return res.status(200).json(await db.UpdateOrder(order.id, { external: { ...ext, priceAdjust: { amount, reason, customReason, at: now, by: req.user?.username || null } }, updatedAt: now }, req.tenantId));
+});
 
 // Solo pedidos que reparte el propio restaurante: salió (started), va llegando (arriving), entregado (delivered)
-async function deliveryStatusUberOrder(req, res) {
-  try {
-    const order = await loadAccepted(req, res);
-    if (!order) return null;
-    const status = req.body?.status;
-    if (!uber.DELIVERY_STATUSES.includes(status)) return res.status(400).send('Estado de entrega inválido');
-    if (order.external.type !== 'DELIVERY_BY_RESTAURANT') {
-      return res.status(400).send('Este pedido no lo reparte el restaurante: Uber lleva el seguimiento');
-    }
-    try {
-      await uber.restaurantDeliveryStatus(order.external.orderId, status);
-    } catch (err) {
-      logApiError(req, order, 'delivery', err);
-      return uberClosed(res, err);
-    }
-    const now = new Date();
-    const patch = { external: { ...order.external, deliveryStatus: status }, updatedAt: now };
-    if (status === 'delivered') patch.status = 'served';
-    return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al avisar la entrega');
+const deliveryStatusUberOrder = handle('Error al avisar la entrega', async (req, res) => {
+  const order = await loadAccepted(req, res);
+  if (!order) return null;
+  const status = req.body?.status;
+  if (!uber.DELIVERY_STATUSES.includes(status)) return res.status(400).send('Estado de entrega inválido');
+  if (order.external.type !== 'DELIVERY_BY_RESTAURANT') {
+    return res.status(400).send('Este pedido no lo reparte el restaurante: Uber lleva el seguimiento');
   }
-}
+  try {
+    await uber.restaurantDeliveryStatus(order.external.orderId, status);
+  } catch (err) {
+    logApiError(req, order, 'delivery', err);
+    return uberClosed(res, err);
+  }
+  const now = new Date();
+  const patch = { external: { ...order.external, deliveryStatus: status }, updatedAt: now };
+  if (status === 'delivered') patch.status = 'served';
+  return res.status(200).json(await db.UpdateOrder(order.id, patch, req.tenantId));
+});
 
 // —— Estado de la tienda en Uber (en línea o pausada)
-async function uberStoreStatus(req, res) {
+const uberStoreStatus = handle('Error al leer el estado de la tienda', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(200).json({ linked: false });
+  const base = { linked: true, autoPause: link.autoPause !== false, pausedByCash: !!link.pausedByCash };
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(200).json({ linked: false });
-    const base = { linked: true, autoPause: link.autoPause !== false, pausedByCash: !!link.pausedByCash };
-    try {
-      const s = await uber.storeStatus(link.storeId);
-      return res.status(200).json({ ...base, status: s?.status || null, offlineReason: s?.offlineReason || null });
-    } catch (err) {
-      console.error('[uber]', err.message);
-      return res.status(200).json({ ...base, error: 'No se pudo consultar el estado a Uber Eats' });
-    }
+    const s = await uber.storeStatus(link.storeId);
+    return res.status(200).json({ ...base, status: s?.status || null, offlineReason: s?.offlineReason || null });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer el estado de la tienda');
+    console.error('[uber]', err.message);
+    return res.status(200).json({ ...base, error: 'No se pudo consultar el estado a Uber Eats' });
   }
-}
+});
 
 // Pausar (con o sin hora para reanudarse sola) o reanudar la tienda a mano
-async function uberSetStoreStatus(req, res) {
+const uberSetStoreStatus = handle('Error al cambiar el estado de la tienda', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+  const status = req.body?.status;
+  if (!['ONLINE', 'PAUSED'].includes(status)) return res.status(400).send('Estado inválido');
+  const minutes = Number(req.body?.minutes);
+  const pausedUntil =
+    status === 'PAUSED' && Number.isFinite(minutes) && minutes >= 5 && minutes <= 1440 ? new Date(Date.now() + Math.round(minutes) * 60_000) : null;
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    const status = req.body?.status;
-    if (!['ONLINE', 'PAUSED'].includes(status)) return res.status(400).send('Estado inválido');
-    const minutes = Number(req.body?.minutes);
-    const pausedUntil =
-      status === 'PAUSED' && Number.isFinite(minutes) && minutes >= 5 && minutes <= 1440 ? new Date(Date.now() + Math.round(minutes) * 60_000) : null;
-    try {
-      await uber.setStoreStatus(link.storeId, { status, pausedUntil, reason: status === 'PAUSED' ? 'Pausado desde MiRestaurante' : undefined });
-    } catch (err) {
-      console.error('[uber]', err.message);
-      return res.status(502).send('No se pudo cambiar el estado en Uber Eats. Intenta de nuevo.');
-    }
-    // Lo que se cambia a mano deja de ser «una pausa de la caja»: abrir la caja no lo reanudará por su cuenta
-    await db.SaveIntegration('uber', req.tenantId, { pausedByCash: false });
-    return res.status(200).json({ status, pausedUntil });
+    await uber.setStoreStatus(link.storeId, { status, pausedUntil, reason: status === 'PAUSED' ? 'Pausado desde MiRestaurante' : undefined });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al cambiar el estado de la tienda');
+    console.error('[uber]', err.message);
+    return res.status(502).send('No se pudo cambiar el estado en Uber Eats. Intenta de nuevo.');
   }
-}
+  // Lo que se cambia a mano deja de ser «una pausa de la caja»: abrir la caja no lo reanudará por su cuenta
+  await db.SaveIntegration('uber', req.tenantId, { pausedByCash: false });
+  return res.status(200).json({ status, pausedUntil });
+});
 
-async function uberSetAutoPause(req, res) {
-  try {
-    if (typeof req.body?.autoPause !== 'boolean') return res.status(400).send('Indica si se pausa sola (true o false)');
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    await db.SaveIntegration('uber', req.tenantId, { autoPause: req.body.autoPause });
-    return res.status(200).json({ autoPause: req.body.autoPause });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al guardar el ajuste');
-  }
-}
+const uberSetAutoPause = handle('Error al guardar el ajuste', async (req, res) => {
+  if (typeof req.body?.autoPause !== 'boolean') return res.status(400).send('Indica si se pausa sola (true o false)');
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+  await db.SaveIntegration('uber', req.tenantId, { autoPause: req.body.autoPause });
+  return res.status(200).json({ autoPause: req.body.autoPause });
+});
 
 // —— Conectar la tienda con Uber por OAuth
 async function uberConnect(req, res) {
@@ -489,139 +423,85 @@ async function uberOAuthCallback(req, res) {
   }
 }
 
-async function uberPending(req, res) {
-  try {
-    return res.status(200).json({ stores: await activation.pendingStores(req.tenantId) });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer las tiendas');
-  }
-}
+const uberPending = handle('Error al leer las tiendas', async (req, res) => {
+  return res.status(200).json({ stores: await activation.pendingStores(req.tenantId) });
+});
 
-async function uberActivate(req, res) {
-  try {
-    return res.status(200).json(await activation.activatePending(req.tenantId, String(req.body?.storeId || '')));
-  } catch (err) {
-    if (err.status) return res.status(err.status).send(err.message);
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al activar la tienda');
-  }
-}
+const uberActivate = handle('Error al activar la tienda', async (req, res) => {
+  return res.status(200).json(await activation.activatePending(req.tenantId, String(req.body?.storeId || '')));
+}, { statusOf: (err) => err.status });
 
 // —— Tasa de aceptación del negocio y revisión de pedidos perdidos
 const DAYS = [7, 30];
-async function uberMetrics(req, res) {
-  try {
-    const days = DAYS.includes(Number(req.query.days)) ? Number(req.query.days) : 7;
-    const orders = await db.ListUberOrdersSince(req.tenantId, new Date(Date.now() - days * 24 * 3600 * 1000));
-    return res.status(200).json({ days, ...uber.acceptanceStats(orders) });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al calcular la tasa de aceptación');
-  }
-}
+const uberMetrics = handle('Error al calcular la tasa de aceptación', async (req, res) => {
+  const days = DAYS.includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+  const orders = await db.ListUberOrdersSince(req.tenantId, new Date(Date.now() - days * 24 * 3600 * 1000));
+  return res.status(200).json({ days, ...uber.acceptanceStats(orders) });
+});
 
-async function uberReconcile(req, res) {
+const uberReconcile = handle('Error al buscar pedidos', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    try {
-      return res.status(200).json(await uber.reconcileStore(link));
-    } catch (err) {
-      console.error('[uber]', err.message);
-      uber.recordEvent({ eventType: 'api.reconcile', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: err.message });
-      return res.status(502).send('No se pudo consultar a Uber Eats. Intenta de nuevo.');
-    }
+    return res.status(200).json(await uber.reconcileStore(link));
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al buscar pedidos');
+    console.error('[uber]', err.message);
+    uber.recordEvent({ eventType: 'api.reconcile', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: err.message });
+    return res.status(502).send('No se pudo consultar a Uber Eats. Intenta de nuevo.');
   }
-}
+});
 
 // —— Menú en Uber Eats: ver el estado y publicarlo (reemplaza el de la tienda)
-async function uberMenuStatus(req, res) {
-  try {
-    return res.status(200).json(await uberMenu.menuStatus(req.tenantId));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer el menú de Uber Eats');
-  }
-}
+const uberMenuStatus = handle('Error al leer el menú de Uber Eats', async (req, res) => {
+  return res.status(200).json(await uberMenu.menuStatus(req.tenantId));
+});
 
-async function uberPublishMenu(req, res) {
-  try {
-    return res.status(200).json(await uberMenu.publishMenu(req.tenantId, { open: req.body?.open, close: req.body?.close }));
-  } catch (err) {
-    if (err.status) return res.status(err.status).send(err.message);
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al publicar el menú');
-  }
-}
+const uberPublishMenu = handle('Error al publicar el menú', async (req, res) => {
+  return res.status(200).json(await uberMenu.publishMenu(req.tenantId, { open: req.body?.open, close: req.body?.close }));
+}, { statusOf: (err) => err.status });
 
 // —— Horarios especiales de la tienda en Uber Eats (festivos, cierres)
-async function uberHolidays(req, res) {
+const uberHolidays = handle('Error al leer los horarios especiales', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+  const settings = await db.GetSettings(req.tenantId);
+  const today = todayIn(settings?.timezone);
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    const settings = await db.GetSettings(req.tenantId);
-    const today = todayIn(settings?.timezone);
-    try {
-      const data = await uber.holidayHours(link.storeId);
-      // Solo lo de hoy en adelante: lo que ya pasó no sirve de nada
-      return res.status(200).json({ today, days: fromUber(data?.holiday_hours).filter((d) => d.date >= today) });
-    } catch (err) {
-      uber.recordEvent({ eventType: 'api.holidays', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
-      return res.status(502).send('No se pudieron leer los horarios especiales de Uber Eats.');
-    }
+    const data = await uber.holidayHours(link.storeId);
+    // Solo lo de hoy en adelante: lo que ya pasó no sirve de nada
+    return res.status(200).json({ today, days: fromUber(data?.holiday_hours).filter((d) => d.date >= today) });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer los horarios especiales');
+    uber.recordEvent({ eventType: 'api.holidays', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+    return res.status(502).send('No se pudieron leer los horarios especiales de Uber Eats.');
   }
-}
+});
 
-async function uberSetHolidays(req, res) {
+const uberSetHolidays = handle('Error al guardar los horarios especiales', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+  const settings = await db.GetSettings(req.tenantId);
+  const today = todayIn(settings?.timezone);
+  const { value, error } = toUber(req.body?.days, today);
+  if (error) return res.status(400).send(error);
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    const settings = await db.GetSettings(req.tenantId);
-    const today = todayIn(settings?.timezone);
-    const { value, error } = toUber(req.body?.days, today);
-    if (error) return res.status(400).send(error);
-    try {
-      await uber.setHolidayHours(link.storeId, value); // reemplaza todos los de la tienda: por eso se manda la lista completa
-    } catch (err) {
-      uber.recordEvent({ eventType: 'api.holidays', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
-      return res.status(502).send(`Uber Eats no aceptó los horarios especiales${err.detail ? `: ${err.detail}` : ''}`);
-    }
-    return res.status(200).json({ today, days: fromUber(value) });
+    await uber.setHolidayHours(link.storeId, value); // reemplaza todos los de la tienda: por eso se manda la lista completa
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al guardar los horarios especiales');
+    uber.recordEvent({ eventType: 'api.holidays', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+    return res.status(502).send(`Uber Eats no aceptó los horarios especiales${err.detail ? `: ${err.detail}` : ''}`);
   }
-}
+  return res.status(200).json({ today, days: fromUber(value) });
+});
 
 // —— Precios del menú en Uber Eats: subirlos lo que cobra Uber para conservar la ganancia
-async function uberPricing(req, res) {
-  try {
-    // Con `plan` en la dirección es una vista previa de lo que se está escribiendo (no se guarda)
-    return res.status(200).json(await uberMenu.pricingPreview(req.tenantId, req.query?.plan ? req.query : null));
-  } catch (err) {
-    if (err.status) return res.status(err.status).send(err.message);
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer los precios de Uber Eats');
-  }
-}
+const uberPricing = handle('Error al leer los precios de Uber Eats', async (req, res) => {
+  // Con `plan` en la dirección es una vista previa de lo que se está escribiendo (no se guarda)
+  return res.status(200).json(await uberMenu.pricingPreview(req.tenantId, req.query?.plan ? req.query : null));
+}, { statusOf: (err) => err.status });
 
-async function uberSetPricing(req, res) {
-  try {
-    await uberMenu.setPricing(req.tenantId, req.body || {}, req.user?.username || req.user?.name || null);
-    return res.status(200).json(await uberMenu.pricingPreview(req.tenantId));
-  } catch (err) {
-    if (err.status) return res.status(err.status).send(err.message);
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al guardar los precios de Uber Eats');
-  }
-}
+const uberSetPricing = handle('Error al guardar los precios de Uber Eats', async (req, res) => {
+  await uberMenu.setPricing(req.tenantId, req.body || {}, req.user?.username || req.user?.name || null);
+  return res.status(200).json(await uberMenu.pricingPreview(req.tenantId));
+}, { statusOf: (err) => err.status });
 
 // —— Quitar la tienda de Uber por completo (pide autorizar de nuevo)
 async function uberRemove(req, res) {
@@ -633,58 +513,43 @@ async function uberRemove(req, res) {
 }
 
 // —— Tiempo de preparación de la tienda
-async function uberPrep(req, res) {
+const uberPrep = handle('Error al leer el tiempo de preparación', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(200).json({ linked: false });
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(200).json({ linked: false });
-    try {
-      const s = await uber.storeDetails(link.storeId);
-      const mins = Number(s?.avg_prep_time);
-      return res.status(200).json({ linked: true, prepMinutes: Number.isFinite(mins) && mins > 0 ? mins : link.prepMinutes ?? null });
-    } catch (err) {
-      console.error('[uber]', err.message);
-      return res.status(200).json({ linked: true, prepMinutes: link.prepMinutes ?? null, error: 'No se pudo consultar a Uber Eats' });
-    }
+    const s = await uber.storeDetails(link.storeId);
+    const mins = Number(s?.avg_prep_time);
+    return res.status(200).json({ linked: true, prepMinutes: Number.isFinite(mins) && mins > 0 ? mins : link.prepMinutes ?? null });
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer el tiempo de preparación');
+    console.error('[uber]', err.message);
+    return res.status(200).json({ linked: true, prepMinutes: link.prepMinutes ?? null, error: 'No se pudo consultar a Uber Eats' });
   }
-}
+});
 
-async function uberSetPrep(req, res) {
+const uberSetPrep = handle('Error al cambiar el tiempo de preparación', async (req, res) => {
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+  const minutes = Number(req.body?.minutes);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 180) return res.status(400).send('El tiempo debe ser de 1 a 180 minutos');
   try {
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    const minutes = Number(req.body?.minutes);
-    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 180) return res.status(400).send('El tiempo debe ser de 1 a 180 minutos');
-    try {
-      await uber.setPrepTime(link.storeId, minutes);
-    } catch (err) {
-      console.error('[uber]', err.message);
-      uber.recordEvent({ eventType: 'api.prep', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
-      return res.status(502).send('Uber Eats no aceptó el cambio. Puedes ajustarlo en Uber Eats Manager (Ajustes > Tiempo de preparación).');
-    }
-    await db.SaveIntegration('uber', req.tenantId, { prepMinutes: minutes });
-    return res.status(200).json({ prepMinutes: minutes });
+    await uber.setPrepTime(link.storeId, minutes);
   } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al cambiar el tiempo de preparación');
+    console.error('[uber]', err.message);
+    uber.recordEvent({ eventType: 'api.prep', storeId: link.storeId, tenantId: req.tenantId, outcome: 'error', detail: `${err.message} ${err.detail || ''}`.trim() });
+    return res.status(502).send('Uber Eats no aceptó el cambio. Puedes ajustarlo en Uber Eats Manager (Ajustes > Tiempo de preparación).');
   }
-}
+  await db.SaveIntegration('uber', req.tenantId, { prepMinutes: minutes });
+  return res.status(200).json({ prepMinutes: minutes });
+});
 
 // —— Publicar el menú de nuevo solo cuando cambia (se puede apagar)
-async function uberSetAutoPublish(req, res) {
-  try {
-    if (typeof req.body?.autoPublish !== 'boolean') return res.status(400).send('Indica si se actualiza solo (true o false)');
-    const link = await db.GetIntegrationByTenant('uber', req.tenantId);
-    if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
-    await db.SaveIntegration('uber', req.tenantId, { autoPublish: req.body.autoPublish });
-    return res.status(200).json({ autoPublish: req.body.autoPublish });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al guardar el ajuste');
-  }
-}
+const uberSetAutoPublish = handle('Error al guardar el ajuste', async (req, res) => {
+  if (typeof req.body?.autoPublish !== 'boolean') return res.status(400).send('Indica si se actualiza solo (true o false)');
+  const link = await db.GetIntegrationByTenant('uber', req.tenantId);
+  if (!link?.storeId) return res.status(400).send('Vincula primero tu tienda de Uber Eats');
+  await db.SaveIntegration('uber', req.tenantId, { autoPublish: req.body.autoPublish });
+  return res.status(200).json({ autoPublish: req.body.autoPublish });
+});
 
 // —— Revisión de todas las tiendas, para un reloj externo (p. ej. un cron de Vercel). Protegida por CRON_SECRET.
 const sameSecret = (given, secret) => {

@@ -44,6 +44,7 @@
 </template>
 
 <script setup>
+import { errorText as text } from "../format";
 import { askConfirm } from "../dialog";
 import { onMounted, ref, watch } from "vue";
 import { apiService } from "../apiService";
@@ -55,7 +56,6 @@ const stores = ref([]);
 const picked = ref("");
 const busy = ref(false);
 const err = ref("");
-const text = (e, fallback) => (typeof e.response?.data === "string" && e.response.data) || e.response?.data?.message || fallback;
 
 async function loadPending() {
   try {

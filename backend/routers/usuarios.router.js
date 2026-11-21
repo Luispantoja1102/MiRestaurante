@@ -2,7 +2,7 @@ const router = require('express').Router();
 const multer = require('multer');
 const upload = multer();
 const userController = require('../controllers/user.controller');
-const { requireAuth, requireActiveSubscription, requireRoles } = require('../middleware/auth.middleware');
+const { guard, requireAuth } = require('../middleware/auth.middleware');
 
 router.post('/register', upload.none(), userController.CreateUser);
 router.get('/referral/:code', userController.CheckReferralCode);
@@ -20,28 +20,22 @@ router.post('/reset-password', upload.none(), userController.ResetPassword);
 router.get('/me', requireAuth, userController.Me);
 router.put('/password', requireAuth, userController.ChangePassword);
 
-router.get('/find', requireAuth, requireActiveSubscription, requireRoles('admin'), upload.none(), userController.FindUserByEmail);
+router.get('/find', ...guard('admin'), upload.none(), userController.FindUserByEmail);
 router.get(
   '/waitlist/',
-  requireAuth,
-  requireActiveSubscription,
-  requireRoles('admin', 'host'),
+  ...guard('admin', 'host'),
   upload.none(),
   userController.GetWaitList
 );
 router.post(
   '/waitlist/add',
-  requireAuth,
-  requireActiveSubscription,
-  requireRoles('admin', 'host'),
+  ...guard('admin', 'host'),
   upload.none(),
   userController.AddWaitList
 );
 router.delete(
   '/waitlist/delete/:id',
-  requireAuth,
-  requireActiveSubscription,
-  requireRoles('admin', 'host'),
+  ...guard('admin', 'host'),
   upload.none(),
   userController.DeleteWaitList
 );

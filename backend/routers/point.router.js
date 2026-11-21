@@ -4,10 +4,10 @@
  */
 const router = require('express').Router();
 const point = require('../services/point.service');
-const { requireAuth, requireActiveSubscription, requireRoles, requireFreshRole } = require('../middleware/auth.middleware');
+const { guard, guardFresh } = require('../middleware/auth.middleware');
 
-const staff = [requireAuth, requireActiveSubscription, requireRoles('admin', 'cashier')];
-const owner = [requireAuth, requireActiveSubscription, requireFreshRole('admin')];
+const staff = [...guard('admin', 'cashier')];
+const owner = [...guardFresh('admin')];
 const fail = (res, err) => res.status(err.status || 500).json({ message: err.message, code: err.code });
 const outcome = (c) => (['paid', 'pending', 'review'].includes(c.status) ? c.status : 'failed');
 

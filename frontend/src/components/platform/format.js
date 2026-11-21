@@ -14,9 +14,8 @@ export function fmtDateTime(value) {
     : d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-export function money(value) {
-  return Number(value || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
-}
+// El dinero y el texto de los errores viven en src/format.js (los usa toda la aplicación); aquí se reexportan para no tocar estas pantallas
+export { money, errorText } from "../../format";
 
 /** "hace 3 días", "hoy"… para la última vez que alguien entró. */
 export function fmtAgo(value) {
@@ -51,8 +50,3 @@ export const TICKET_STATUS = { open: "Esperando al equipo", answered: "Respondid
 // Reutiliza los colores de los estados del panel: pendiente de atender en ámbar, resuelto en verde
 export const TICKET_PILL = { open: "past_due", answered: "active", closed: "never_logged" };
 export const percent = (rate) => `${Math.round(Number(rate || 0) * 100)}%`;
-
-export function errorText(e, fallback) {
-  const data = e?.response?.data;
-  return (typeof data === "string" && data) || data?.message || fallback;
-}

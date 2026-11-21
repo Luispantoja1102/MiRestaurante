@@ -263,10 +263,11 @@
 </template>
 
 <script setup>
+import { money, errorText } from "../format";
 import { askConfirm } from "../dialog";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { bindLive } from "../live";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import TerminalNote from "../components/TerminalNote.vue";
 import UberStoreStatus from "../components/UberStoreStatus.vue";
@@ -285,6 +286,7 @@ import {
 } from "../labels";
 
 const router = useRouter();
+const route = useRoute();
 const orders = ref([]);
 
 // ——— Pedidos de una plataforma (Uber Eats) que esperan respuesta ———
@@ -361,20 +363,14 @@ function replaceOrder(updated) {
   const idx = orders.value.findIndex((x) => x.id === updated.id);
   if (idx >= 0) orders.value[idx] = updated;
 }
-async function acceptExternal(o) {
-  extBusy.value = true;
-  extErr.value = "";
-  try {
-    replaceOrder(await apiService.acceptExternalOrder(o.id, prepMinutes.value, pickupNote.value));
-    pickupNote.value = "";
-    await loadCash();
-  } catch (e) {
-    extErr.value = e.response?.data || "No se pudo aceptar el pedido.";
-    await load();
-  } finally {
-    extBusy.value = false;
-  }
-}
+// Al aceptar también se actualiza la caja (el pedido de plataforma entra como cobrado) y se limpian las indicaciones
+const acceptExternal = (o) =>
+  runExternal(() => apiService.acceptExternalOrder(o.id, prepMinutes.value, pickupNote.value), "No se pudo aceptar el pedido.", {
+    after: async () => {
+      pickupNote.value = "";
+      await loadCash();
+    },
+  });
 const CANCEL_BLOCK = { ORDER_READY: "el pedido ya está listo" };
 const denyItems = ref([]); // productos agotados que se le dicen a Uber al rechazar
 const pickable = (o) => (o?.items || []).filter((i) => i.cartItemId);
@@ -430,16 +426,20 @@ function uberReadyText(o) {
 const canAddPrep = (o) => canMarkReady(o) && !o.external?.readyNotifiedAt && !o.external?.readyAdjusted && o.external?.sync?.adjustReadyTime?.eligible !== false;
 const canAskOutOfItem = (o) =>
   isLive(o) && !o.external?.readyNotifiedAt && !o.external?.askingCustomer && pickable(o).length > 0 && o.external?.sync?.outOfItem?.eligible !== false;
-async function runExternal(call, fallback) {
+// Toda acción sobre un pedido de plataforma pasa por aquí: marca «ocupado», pone el pedido actualizado en la lista y, si falla,
+// muestra el error y recarga. `after`: qué sigue si salió bien · `always`: qué se hace pase lo que pase (p. ej. cerrar el aviso).
+async function runExternal(call, fallback, { after, always } = {}) {
   extBusy.value = true;
   extErr.value = "";
   extNote.value = "";
   try {
     replaceOrder(await call());
+    await after?.();
   } catch (e) {
-    extErr.value = e.response?.data || fallback;
+    extErr.value = errorText(e, fallback);
     await load();
   } finally {
+    always?.();
     extBusy.value = false;
   }
 }
@@ -513,37 +513,19 @@ async function confirmOutOfItem() {
   oosTarget.value = null;
   await runExternal(() => apiService.externalOutOfItem(o.id, oosItem.value, oosMessage.value, oosType.value), "No se pudo avisar del producto agotado.");
 }
-async function deliveryStep(o, status) {
-  extBusy.value = true;
-  extErr.value = "";
-  try {
-    replaceOrder(await apiService.externalDeliveryStatus(o.id, status));
-  } catch (e) {
-    extErr.value = e.response?.data || "No se pudo avisar a la plataforma.";
-    await load();
-  } finally {
-    extBusy.value = false;
-  }
-}
-async function confirmDeny() {
-  extBusy.value = true;
-  extErr.value = "";
-  try {
-    const cancel = reasonMode.value === "cancel";
-    const label = reasons.value.find((r) => r.code === denyCode.value)?.label || "";
-    replaceOrder(
+const deliveryStep = (o, status) => runExternal(() => apiService.externalDeliveryStatus(o.id, status), "No se pudo avisar a la plataforma.");
+function confirmDeny() {
+  const o = denyTarget.value;
+  const cancel = reasonMode.value === "cancel";
+  const label = reasons.value.find((r) => r.code === denyCode.value)?.label || "";
+  return runExternal(
+    () =>
       cancel
-        ? await apiService.cancelExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value)
-        : await apiService.denyExternalOrder(denyTarget.value.id, denyCode.value, reasonDetails.value || label, denyItems.value)
-    );
-    denyTarget.value = null;
-  } catch (e) {
-    denyTarget.value = null;
-    extErr.value = e.response?.data || (reasonMode.value === "cancel" ? "No se pudo cancelar el pedido." : "No se pudo rechazar el pedido.");
-    await load();
-  } finally {
-    extBusy.value = false;
-  }
+        ? apiService.cancelExternalOrder(o.id, denyCode.value, reasonDetails.value)
+        : apiService.denyExternalOrder(o.id, denyCode.value, reasonDetails.value || label, denyItems.value),
+    cancel ? "No se pudo cancelar el pedido." : "No se pudo rechazar el pedido.",
+    { always: () => (denyTarget.value = null) }
+  );
 }
 const filter = ref("open");
 const payOrder = ref(null);
@@ -661,10 +643,18 @@ watch([filter, source], () => {
     /* no pasa nada */
   }
 });
+// Si se llega desde el aviso de un pedido de plataforma (?origen=uber), Caja abre directo en esa pestaña, con los abiertos
+watch(
+  () => route.query.origen,
+  (origen) => {
+    if (!["all", "local", "uber", "other"].includes(origen)) return;
+    source.value = origen;
+    filter.value = "open";
+    router.replace({ query: {} }); // la dirección queda limpia: recargar o cambiar de pestaña ya no lo vuelve a forzar
+  },
+  { immediate: true }
+);
 
-function money(n) {
-  return Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
-}
 function formatDate(d) {
   if (!d) return "";
   return new Date(d).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short" });
@@ -707,7 +697,7 @@ async function openCash() {
     cashMsg.value = "Caja abierta.";
     await loadCash();
   } catch (e) {
-    cashErr.value = e.response?.data || "No se pudo abrir la caja";
+    cashErr.value = errorText(e, "No se pudo abrir la caja");
   } finally {
     cashBusy.value = false;
   }
@@ -727,7 +717,7 @@ async function closeCash() {
     }
     await loadCash();
   } catch (e) {
-    cashErr.value = e.response?.data || "No se pudo cerrar la caja";
+    cashErr.value = errorText(e, "No se pudo cerrar la caja");
   } finally {
     cashBusy.value = false;
   }
@@ -785,7 +775,7 @@ async function confirmPay() {
     if (shouldAutoPrint()) printOrder(updated, "receipt");
     else if (await askConfirm("¿Imprimir cuenta?", { title: "Pedido cobrado", confirmText: "Imprimir", cancelText: "Ahora no" })) printOrder(updated, "receipt", { auto: true });
   } catch (e) {
-    payErr.value = e.response?.data || "No se pudo cobrar";
+    payErr.value = errorText(e, "No se pudo cobrar");
   } finally {
     payBusy.value = false;
   }
@@ -798,7 +788,7 @@ async function setStatus(o, status) {
     const idx = orders.value.findIndex((x) => x.id === updated.id);
     if (idx >= 0) orders.value[idx] = updated;
   } catch (e) {
-    extErr.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo cambiar el estado del pedido.";
+    extErr.value = errorText(e, "No se pudo cambiar el estado del pedido.");
   }
 }
 

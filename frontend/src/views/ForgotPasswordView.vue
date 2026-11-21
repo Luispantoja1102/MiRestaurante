@@ -29,6 +29,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { ref } from "vue";
 import { apiService } from "../apiService";
 
@@ -47,7 +48,7 @@ async function submit() {
       ? "Solicitud creada. Revisa la consola del backend (SMTP no configurado)."
       : "Si el correo existe, enviamos un enlace.";
   } catch (e) {
-    err.value = typeof e.response?.data === "string" ? e.response.data : "No se pudo enviar";
+    err.value = errorText(e, "No se pudo enviar");
   } finally {
     loading.value = false;
   }

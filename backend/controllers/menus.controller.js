@@ -2,92 +2,58 @@ const Joi = require('joi');
 const db = require('../database/mongodb');
 const { normalizeRecipe, RecipeError } = require('../models/inventory');
 const uberMenu = require('../services/uber.menu.service');
+const { handle } = require('../utils/handle');
 
 // Si el negocio ya publicó su menú en Uber, un cambio aquí se manda solo (sin esperar y sin estorbar)
 const menuChanged = (req) => uberMenu.onMenuChanged(req.tenantId);
 
-async function listMenus(req, res) {
-  try {
-    return res.status(200).json(await db.GetMenus(req.tenantId));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al listar menús');
-  }
-}
+const listMenus = handle('Error al listar menús', async (req, res) => {
+  return res.status(200).json(await db.GetMenus(req.tenantId));
+});
 
-async function getMenu(req, res) {
-  try {
-    const menu = await db.GetMenuById(req.params.id, req.tenantId);
-    if (!menu) return res.status(404).send('Menú no encontrado');
-    return res.status(200).json(menu);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al obtener menú');
-  }
-}
+const getMenu = handle('Error al obtener menú', async (req, res) => {
+  const menu = await db.GetMenuById(req.params.id, req.tenantId);
+  if (!menu) return res.status(404).send('Menú no encontrado');
+  return res.status(200).json(menu);
+});
 
-async function createMenu(req, res) {
-  try {
-    const { name, description } = req.body || {};
-    if (!name) return res.status(400).send('name es requerido');
-    const created = await db.CreateMenu({
-      name,
-      description: description || '',
-      tenantId: req.tenantId,
-    });
-    menuChanged(req);
-    return res.status(201).json(created);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al crear menú');
-  }
-}
+const createMenu = handle('Error al crear menú', async (req, res) => {
+  const { name, description } = req.body || {};
+  if (!name) return res.status(400).send('name es requerido');
+  const created = await db.CreateMenu({
+    name,
+    description: description || '',
+    tenantId: req.tenantId,
+  });
+  menuChanged(req);
+  return res.status(201).json(created);
+});
 
-async function updateMenu(req, res) {
-  try {
-    const updated = await db.UpdateMenu(req.params.id, req.body || {}, req.tenantId);
-    if (!updated) return res.status(404).send('Menú no encontrado');
-    menuChanged(req);
-    return res.status(200).json(updated);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al actualizar menú');
-  }
-}
+const updateMenu = handle('Error al actualizar menú', async (req, res) => {
+  const updated = await db.UpdateMenu(req.params.id, req.body || {}, req.tenantId);
+  if (!updated) return res.status(404).send('Menú no encontrado');
+  menuChanged(req);
+  return res.status(200).json(updated);
+});
 
-async function deleteMenu(req, res) {
-  try {
-    const result = await db.DeleteMenu(req.params.id, req.tenantId);
-    if (!result || result.deletedCount === 0) {
-      return res.status(404).send('Menú no encontrado');
-    }
-    menuChanged(req);
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al eliminar menú');
+const deleteMenu = handle('Error al eliminar menú', async (req, res) => {
+  const result = await db.DeleteMenu(req.params.id, req.tenantId);
+  if (!result || result.deletedCount === 0) {
+    return res.status(404).send('Menú no encontrado');
   }
-}
+  menuChanged(req);
+  return res.status(200).json({ ok: true });
+});
 
-async function listFoods(req, res) {
-  try {
-    return res.status(200).json(await db.GetFoods(req.tenantId));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al listar platillos');
-  }
-}
+const listFoods = handle('Error al listar platillos', async (req, res) => {
+  return res.status(200).json(await db.GetFoods(req.tenantId));
+});
 
-async function getFood(req, res) {
-  try {
-    const food = await db.GetFoodById(req.params.id, req.tenantId);
-    if (!food) return res.status(404).send('Platillo no encontrado');
-    return res.status(200).json(food);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al obtener platillo');
-  }
-}
+const getFood = handle('Error al obtener platillo', async (req, res) => {
+  const food = await db.GetFoodById(req.params.id, req.tenantId);
+  if (!food) return res.status(404).send('Platillo no encontrado');
+  return res.status(200).json(food);
+});
 
 // La foto llega ya reducida desde el navegador (JPEG). Se guarda aparte y el platillo apunta a una dirección https pública,
 // que es lo único que Uber Eats acepta como `image_url`.
@@ -135,90 +101,73 @@ async function ingredientsMap(tenantId) {
   return new Map((await db.GetIngredients(tenantId)).map((i) => [String(i.id), i]));
 }
 
-async function createFood(req, res) {
-  try {
-    const body = req.body || {};
-    const { error, value } = foodSchema.validate(body);
-    if (error) return res.status(400).send(error.details[0].message);
-    if (!(await db.GetMenuById(value.menuId, req.tenantId))) {
-      return res.status(400).send('La categoría no existe');
-    }
+const createFood = handle('Error al crear platillo', async (req, res) => {
+  const body = req.body || {};
+  const { error, value } = foodSchema.validate(body);
+  if (error) return res.status(400).send(error.details[0].message);
+  if (!(await db.GetMenuById(value.menuId, req.tenantId))) {
+    return res.status(400).send('La categoría no existe');
+  }
 
-    const extra = {};
-    if (body.recipe !== undefined || body.extras !== undefined) {
-      Object.assign(extra, normalizeRecipe({ recipe: body.recipe, extras: body.extras }, await ingredientsMap(req.tenantId)));
-    }
-    const image = parseImage(value.imgUrl);
-    let created = await db.CreateFood({
-      ...value,
-      imgUrl: image ? '' : value.imgUrl,
-      recipe: extra.recipe || [],
-      extras: extra.extras || [],
-      tenantId: req.tenantId,
-    });
+  const extra = {};
+  if (body.recipe !== undefined || body.extras !== undefined) {
+    Object.assign(extra, normalizeRecipe({ recipe: body.recipe, extras: body.extras }, await ingredientsMap(req.tenantId)));
+  }
+  const image = parseImage(value.imgUrl);
+  let created = await db.CreateFood({
+    ...value,
+    imgUrl: image ? '' : value.imgUrl,
+    recipe: extra.recipe || [],
+    extras: extra.extras || [],
+    tenantId: req.tenantId,
+  });
+  if (image) {
+    await db.SaveFoodImage(created.id, req.tenantId, image);
+    created = await db.UpdateFood(created.id, { imgUrl: imageUrl(req, created.id) }, req.tenantId);
+  }
+  menuChanged(req);
+  return res.status(201).json(created);
+}, { statusOf: (err) => (err instanceof RecipeError ? 400 : undefined) });
+
+const updateFood = handle('Error al actualizar platillo', async (req, res) => {
+  const body = req.body || {};
+  const { error, value } = foodUpdateSchema.validate(body);
+  if (error) return res.status(400).send(error.details[0].message);
+  if (value.menuId && !(await db.GetMenuById(value.menuId, req.tenantId))) {
+    return res.status(400).send('La categoría no existe');
+  }
+
+  const patch = {};
+  for (const key of ['name', 'price', 'priceIncludesTax', 'description', 'imgUrl', 'menuId']) {
+    if (body[key] !== undefined) patch[key] = value[key];
+  }
+  if (body.recipe !== undefined || body.extras !== undefined) {
+    Object.assign(patch, normalizeRecipe({ recipe: body.recipe, extras: body.extras }, await ingredientsMap(req.tenantId)));
+  }
+  const image = patch.imgUrl ? parseImage(patch.imgUrl) : null;
+  if (image || patch.imgUrl === '') {
+    if (!(await db.GetFoodById(req.params.id, req.tenantId))) return res.status(404).send('Platillo no encontrado');
     if (image) {
-      await db.SaveFoodImage(created.id, req.tenantId, image);
-      created = await db.UpdateFood(created.id, { imgUrl: imageUrl(req, created.id) }, req.tenantId);
+      await db.SaveFoodImage(req.params.id, req.tenantId, image);
+      patch.imgUrl = imageUrl(req, req.params.id);
+    } else {
+      await db.DeleteFoodImage(req.params.id, req.tenantId); // «Quitar foto»
     }
-    menuChanged(req);
-    return res.status(201).json(created);
-  } catch (err) {
-    if (err instanceof RecipeError) return res.status(400).send(err.message);
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al crear platillo');
   }
-}
+  const updated = await db.UpdateFood(req.params.id, patch, req.tenantId);
+  if (!updated) return res.status(404).send('Platillo no encontrado');
+  menuChanged(req);
+  return res.status(200).json(updated);
+}, { statusOf: (err) => (err instanceof RecipeError ? 400 : undefined) });
 
-async function updateFood(req, res) {
-  try {
-    const body = req.body || {};
-    const { error, value } = foodUpdateSchema.validate(body);
-    if (error) return res.status(400).send(error.details[0].message);
-    if (value.menuId && !(await db.GetMenuById(value.menuId, req.tenantId))) {
-      return res.status(400).send('La categoría no existe');
-    }
-
-    const patch = {};
-    for (const key of ['name', 'price', 'priceIncludesTax', 'description', 'imgUrl', 'menuId']) {
-      if (body[key] !== undefined) patch[key] = value[key];
-    }
-    if (body.recipe !== undefined || body.extras !== undefined) {
-      Object.assign(patch, normalizeRecipe({ recipe: body.recipe, extras: body.extras }, await ingredientsMap(req.tenantId)));
-    }
-    const image = patch.imgUrl ? parseImage(patch.imgUrl) : null;
-    if (image || patch.imgUrl === '') {
-      if (!(await db.GetFoodById(req.params.id, req.tenantId))) return res.status(404).send('Platillo no encontrado');
-      if (image) {
-        await db.SaveFoodImage(req.params.id, req.tenantId, image);
-        patch.imgUrl = imageUrl(req, req.params.id);
-      } else {
-        await db.DeleteFoodImage(req.params.id, req.tenantId); // «Quitar foto»
-      }
-    }
-    const updated = await db.UpdateFood(req.params.id, patch, req.tenantId);
-    if (!updated) return res.status(404).send('Platillo no encontrado');
-    menuChanged(req);
-    return res.status(200).json(updated);
-  } catch (err) {
-    if (err instanceof RecipeError) return res.status(400).send(err.message);
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al actualizar platillo');
+const deleteFood = handle('Error al eliminar platillo', async (req, res) => {
+  const result = await db.DeleteFood(req.params.id, req.tenantId);
+  if (!result || result.deletedCount === 0) {
+    return res.status(404).send('Platillo no encontrado');
   }
-}
-
-async function deleteFood(req, res) {
-  try {
-    const result = await db.DeleteFood(req.params.id, req.tenantId);
-    if (!result || result.deletedCount === 0) {
-      return res.status(404).send('Platillo no encontrado');
-    }
-    menuChanged(req);
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al eliminar platillo');
-  }
-}
+  menuChanged(req);
+  return res.status(200).json({ ok: true });
+});
 
 module.exports = {
   listMenus,

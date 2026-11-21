@@ -27,6 +27,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { computed, onMounted, reactive, ref } from "vue";
 import { apiService } from "../apiService";
 
@@ -57,7 +58,7 @@ async function reconcile() {
     msg.value = r.recovered || r.closed ? `Se recuperaron ${r.recovered} pedido(s) y se cerraron ${r.closed}.` : "No faltaba ningún pedido.";
     await load();
   } catch (e) {
-    err.value = (typeof e.response?.data === "string" && e.response.data) || "No se pudo consultar a Uber Eats.";
+    err.value = errorText(e, "No se pudo consultar a Uber Eats.");
   } finally {
     busy.value = false;
   }

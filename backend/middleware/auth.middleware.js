@@ -96,7 +96,17 @@ async function requireActiveSubscription(req, res, next) {
   }
 }
 
+/**
+ * Lo que casi toda ruta de un negocio necesita, en una sola línea: sesión válida + suscripción activa + uno de estos roles.
+ *   router.put('/ruta', ...guard('admin', 'cashier'), controlador);
+ * `guardFresh` es igual pero confirma el rol actual en la base de datos (acciones sensibles).
+ */
+const guard = (...roles) => [requireAuth, requireActiveSubscription, requireRoles(...roles)];
+const guardFresh = (...roles) => [requireAuth, requireActiveSubscription, requireFreshRole(...roles)];
+
 module.exports = {
+  guard,
+  guardFresh,
   requireAuth,
   requireRoles,
   requireFreshRole,

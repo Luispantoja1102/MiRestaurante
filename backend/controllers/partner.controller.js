@@ -1,5 +1,6 @@
 const partners = require('../services/partner.service');
 const db = require('../database/mongodb');
+const { handleWith } = require('../utils/handle');
 
 function fail(res, err) {
   if (err instanceof partners.PartnerError) return res.status(err.status).send(err.message);
@@ -7,13 +8,7 @@ function fail(res, err) {
   return res.status(500).send('No pude completar la acción. Intenta de nuevo.');
 }
 
-const handle = (fn) => async (req, res) => {
-  try {
-    return await fn(req, res);
-  } catch (err) {
-    return fail(res, err);
-  }
-};
+const handle = handleWith(fail); // errores de dominio con su código; lo demás, 500
 
 const home = handle(async (req, res) => res.status(200).json(await partners.home(req.user)));
 const clients = handle(async (req, res) => res.status(200).json(await partners.listClients(req.user)));

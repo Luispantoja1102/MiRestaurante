@@ -9,6 +9,7 @@ const referrals = require('../services/referral.service');
 const partners = require('../services/partner.service');
 const support = require('../services/support.service');
 const uberStats = require('../services/uber.service');
+const { handle } = require('../utils/handle');
 
 const PLAN_NAMES = { basic: 'Básico', pro: 'Pro' };
 const STATUS_NAMES = {
@@ -87,289 +88,244 @@ async function clientCard(tenant, { withUsers = false, pre = null } = {}) {
   return card;
 }
 
-async function listTenants(req, res) {
-  try {
-    const tenants = await db.ListTenants();
-    const ids = tenants.map((t) => t.id);
-    const [settings, users] = await Promise.all([db.GetSettingsMany(ids), db.ListUsersByTenants(ids)]);
-    const pre = { settings, users };
-    const { map: waiting } = await support.waitingByTenant();
-    const cards = await Promise.all(tenants.map((tenant) => clientCard(tenant, { pre })));
-    // Cuántos tickets de cada negocio esperan respuesta del equipo
-    return res.status(200).json(cards.map((card) => ({ ...card, waiting: waiting.get(String(card.id)) || 0 })));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude cargar los clientes.');
+const listTenants = handle('No pude cargar los clientes.', async (req, res) => {
+  const tenants = await db.ListTenants();
+  const ids = tenants.map((t) => t.id);
+  const [settings, users] = await Promise.all([db.GetSettingsMany(ids), db.ListUsersByTenants(ids)]);
+  const pre = { settings, users };
+  const { map: waiting } = await support.waitingByTenant();
+  const cards = await Promise.all(tenants.map((tenant) => clientCard(tenant, { pre })));
+  // Cuántos tickets de cada negocio esperan respuesta del equipo
+  return res.status(200).json(cards.map((card) => ({ ...card, waiting: waiting.get(String(card.id)) || 0 })));
+});
+
+const getTenant = handle('No pude abrir ese cliente.', async (req, res) => {
+  const tenant = await db.GetTenantById(req.params.id);
+  if (!tenant) return res.status(404).send('No encontré ese cliente.');
+  const [card, usage, referrer] = await Promise.all([
+    clientCard(tenant, { withUsers: true }),
+    db.CountTenantUsage(tenant.id).catch(() => null),
+    referrals.brief(tenant.referrerId).catch(() => null),
+  ]);
+  return res.status(200).json({ ...card, usage, referrer });
+});
+
+const updateTenant = handle('No pude guardar los cambios.', async (req, res) => {
+  const current = await db.GetTenantById(req.params.id);
+  if (!current) return res.status(404).send('No encontré ese cliente.');
+  const tenant = { ...current }; // foto de "antes" para la bitácora
+
+  const body = req.body || {};
+  const businessName = String(body.businessName || '').trim();
+  if (businessName.length < 2) return res.status(400).send('Escribe el nombre del negocio.');
+
+  const plan = String(body.plan || tenant.plan || 'basic');
+  if (!PLANS.includes(plan)) return res.status(400).send('Ese plan no existe.');
+
+  const billingStatus = String(body.billingStatus || tenant.billingStatus || 'trialing');
+  if (!BILLING_STATUSES.includes(billingStatus)) return res.status(400).send('Ese estado no existe.');
+
+  const patch = { name: businessName, plan, billingStatus };
+  if (body.trialEndsOn) {
+    const trial = new Date(`${body.trialEndsOn}T12:00:00`);
+    if (Number.isNaN(trial.getTime())) return res.status(400).send('La fecha de prueba no es válida.');
+    patch.trialEndsAt = trial;
   }
-}
-
-async function getTenant(req, res) {
-  try {
-    const tenant = await db.GetTenantById(req.params.id);
-    if (!tenant) return res.status(404).send('No encontré ese cliente.');
-    const [card, usage, referrer] = await Promise.all([
-      clientCard(tenant, { withUsers: true }),
-      db.CountTenantUsage(tenant.id).catch(() => null),
-      referrals.brief(tenant.referrerId).catch(() => null),
-    ]);
-    return res.status(200).json({ ...card, usage, referrer });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude abrir ese cliente.');
+  if (billingStatus === 'suspended') {
+    patch.suspendedAt = tenant.suspendedAt || new Date();
+    patch.suspendedReason = String(body.suspendedReason || tenant.suspendedReason || 'soporte').slice(0, 200);
+  } else {
+    patch.suspendedAt = null;
+    patch.suspendedReason = null;
   }
-}
-
-async function updateTenant(req, res) {
-  try {
-    const current = await db.GetTenantById(req.params.id);
-    if (!current) return res.status(404).send('No encontré ese cliente.');
-    const tenant = { ...current }; // foto de "antes" para la bitácora
-
-    const body = req.body || {};
-    const businessName = String(body.businessName || '').trim();
-    if (businessName.length < 2) return res.status(400).send('Escribe el nombre del negocio.');
-
-    const plan = String(body.plan || tenant.plan || 'basic');
-    if (!PLANS.includes(plan)) return res.status(400).send('Ese plan no existe.');
-
-    const billingStatus = String(body.billingStatus || tenant.billingStatus || 'trialing');
-    if (!BILLING_STATUSES.includes(billingStatus)) return res.status(400).send('Ese estado no existe.');
-
-    const patch = { name: businessName, plan, billingStatus };
-    if (body.trialEndsOn) {
-      const trial = new Date(`${body.trialEndsOn}T12:00:00`);
-      if (Number.isNaN(trial.getTime())) return res.status(400).send('La fecha de prueba no es válida.');
-      patch.trialEndsAt = trial;
-    }
-    if (billingStatus === 'suspended') {
-      patch.suspendedAt = tenant.suspendedAt || new Date();
-      patch.suspendedReason = String(body.suspendedReason || tenant.suspendedReason || 'soporte').slice(0, 200);
-    } else {
-      patch.suspendedAt = null;
-      patch.suspendedReason = null;
-    }
-    if (billingStatus === 'active' && !tenant.currentPeriodEnd) {
-      const periodEnd = new Date();
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
-      patch.currentPeriodEnd = periodEnd;
-    }
-
-    await db.UpdateTenant(tenant.id, patch);
-    const changes = audit.describeChanges(tenant, { ...tenant, ...patch }, { plan: PLAN_NAMES, status: STATUS_NAMES });
-    if (changes.length) {
-      await audit.record(req, {
-        tenantId: tenant.id,
-        type: 'tenant_updated',
-        message: `Cambió ${changes.join(', ')}`,
-        meta: { changes },
-      });
-    }
-    // Teléfono y dirección viven en los ajustes del negocio; si aún no los configuró, no se crean a medias
-    if (await db.GetSettings(tenant.id)) {
-      await db.UpdateSettings(
-        {
-          businessName,
-          phone: String(body.phone || '').trim().slice(0, 30),
-          address: String(body.address || '').trim().slice(0, 200),
-          updatedAt: new Date(),
-        },
-        tenant.id
-      );
-    }
-
-    return res.status(200).json(await clientCard(await db.GetTenantById(tenant.id), { withUsers: true }));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude guardar los cambios.');
+  if (billingStatus === 'active' && !tenant.currentPeriodEnd) {
+    const periodEnd = new Date();
+    periodEnd.setMonth(periodEnd.getMonth() + 1);
+    patch.currentPeriodEnd = periodEnd;
   }
-}
 
-async function suspend(req, res) {
-  try {
-    const reason = String(req.body?.reason || 'manual').slice(0, 200);
-    const updated = await db.UpdateTenant(req.params.id, {
-      billingStatus: 'suspended',
-      suspendedAt: new Date(),
-      suspendedReason: reason,
-    });
-    if (!updated) return res.status(404).send('Tenant no encontrado');
+  await db.UpdateTenant(tenant.id, patch);
+  const changes = audit.describeChanges(tenant, { ...tenant, ...patch }, { plan: PLAN_NAMES, status: STATUS_NAMES });
+  if (changes.length) {
     await audit.record(req, {
-      tenantId: req.params.id,
-      type: 'tenant_suspended',
-      message: `Suspendió el negocio (${reason})`,
-      meta: { reason },
+      tenantId: tenant.id,
+      type: 'tenant_updated',
+      message: `Cambió ${changes.join(', ')}`,
+      meta: { changes },
     });
-    return res.status(200).json(updated);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al suspender');
   }
-}
+  // Teléfono y dirección viven en los ajustes del negocio; si aún no los configuró, no se crean a medias
+  if (await db.GetSettings(tenant.id)) {
+    await db.UpdateSettings(
+      {
+        businessName,
+        phone: String(body.phone || '').trim().slice(0, 30),
+        address: String(body.address || '').trim().slice(0, 200),
+        updatedAt: new Date(),
+      },
+      tenant.id
+    );
+  }
 
-async function reactivate(req, res) {
-  try {
-    const mode = String(req.body?.mode || 'active'); // active | trial
-    const patch = { suspendedAt: null, suspendedReason: null };
-    if (mode === 'trial') {
-      patch.billingStatus = 'trialing';
-      patch.trialEndsAt = trialEndsFrom(new Date());
-    } else {
-      patch.billingStatus = 'active';
-      const periodEnd = new Date();
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
-      patch.currentPeriodEnd = periodEnd;
-    }
-    const updated = await db.UpdateTenant(req.params.id, patch);
-    if (!updated) return res.status(404).send('Tenant no encontrado');
-    await audit.record(req, {
-      tenantId: req.params.id,
-      type: 'tenant_reactivated',
-      message: mode === 'trial' ? 'Reactivó el negocio con una prueba nueva' : 'Reactivó el negocio',
-      meta: { mode },
-    });
-    return res.status(200).json(updated);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al reactivar');
-  }
-}
+  return res.status(200).json(await clientCard(await db.GetTenantById(tenant.id), { withUsers: true }));
+});
 
-async function setPlan(req, res) {
-  try {
-    const plan = String(req.body?.plan || '');
-    if (!PLANS.includes(plan)) return res.status(400).send('plan debe ser basic o pro');
-    const current = await db.GetTenantById(req.params.id);
-    if (!current) return res.status(404).send('Tenant no encontrado');
-    const tenant = { ...current }; // foto de "antes" para la bitácora
-    const updated = await db.UpdateTenant(req.params.id, { plan });
-    if (!updated) return res.status(404).send('Tenant no encontrado');
-    await audit.record(req, {
-      tenantId: req.params.id,
-      type: 'tenant_plan_changed',
-      message: `Cambió el plan ${PLAN_NAMES[tenant.plan] || tenant.plan} → ${PLAN_NAMES[plan] || plan}`,
-      meta: { from: tenant.plan, to: plan },
-    });
-    return res.status(200).json(updated);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al cambiar plan');
+const suspend = handle('Error al suspender', async (req, res) => {
+  const reason = String(req.body?.reason || 'manual').slice(0, 200);
+  const updated = await db.UpdateTenant(req.params.id, {
+    billingStatus: 'suspended',
+    suspendedAt: new Date(),
+    suspendedReason: reason,
+  });
+  if (!updated) return res.status(404).send('Tenant no encontrado');
+  await audit.record(req, {
+    tenantId: req.params.id,
+    type: 'tenant_suspended',
+    message: `Suspendió el negocio (${reason})`,
+    meta: { reason },
+  });
+  return res.status(200).json(updated);
+});
+
+const reactivate = handle('Error al reactivar', async (req, res) => {
+  const mode = String(req.body?.mode || 'active'); // active | trial
+  const patch = { suspendedAt: null, suspendedReason: null };
+  if (mode === 'trial') {
+    patch.billingStatus = 'trialing';
+    patch.trialEndsAt = trialEndsFrom(new Date());
+  } else {
+    patch.billingStatus = 'active';
+    const periodEnd = new Date();
+    periodEnd.setMonth(periodEnd.getMonth() + 1);
+    patch.currentPeriodEnd = periodEnd;
   }
-}
+  const updated = await db.UpdateTenant(req.params.id, patch);
+  if (!updated) return res.status(404).send('Tenant no encontrado');
+  await audit.record(req, {
+    tenantId: req.params.id,
+    type: 'tenant_reactivated',
+    message: mode === 'trial' ? 'Reactivó el negocio con una prueba nueva' : 'Reactivó el negocio',
+    meta: { mode },
+  });
+  return res.status(200).json(updated);
+});
+
+const setPlan = handle('Error al cambiar plan', async (req, res) => {
+  const plan = String(req.body?.plan || '');
+  if (!PLANS.includes(plan)) return res.status(400).send('plan debe ser basic o pro');
+  const current = await db.GetTenantById(req.params.id);
+  if (!current) return res.status(404).send('Tenant no encontrado');
+  const tenant = { ...current }; // foto de "antes" para la bitácora
+  const updated = await db.UpdateTenant(req.params.id, { plan });
+  if (!updated) return res.status(404).send('Tenant no encontrado');
+  await audit.record(req, {
+    tenantId: req.params.id,
+    type: 'tenant_plan_changed',
+    message: `Cambió el plan ${PLAN_NAMES[tenant.plan] || tenant.plan} → ${PLAN_NAMES[plan] || plan}`,
+    meta: { from: tenant.plan, to: plan },
+  });
+  return res.status(200).json(updated);
+});
 
 /**
  * Resumen del día: cuántos clientes hay por estado y a quién hay que atender hoy
  * (pruebas por vencer, pagos atrasados, negocios suspendidos, altas recientes).
  */
-async function overview(req, res) {
-  try {
-    const tenants = await db.ListTenants();
-    const ids = tenants.map((t) => t.id);
-    const [settings, users] = await Promise.all([db.GetSettingsMany(ids), db.ListUsersByTenants(ids)]);
-    const nameOf = (t) => settings.get(String(t.id))?.businessName || t.name || 'Sin nombre';
-    const now = Date.now();
-    const clients = { total: tenants.length, active: 0, trialing: 0, pastDue: 0, suspended: 0 };
-    const attention = [];
-    let signupsWeek = 0;
-    let signupsMonth = 0;
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
+const overview = handle('No pude armar el resumen.', async (req, res) => {
+  const tenants = await db.ListTenants();
+  const ids = tenants.map((t) => t.id);
+  const [settings, users] = await Promise.all([db.GetSettingsMany(ids), db.ListUsersByTenants(ids)]);
+  const nameOf = (t) => settings.get(String(t.id))?.businessName || t.name || 'Sin nombre';
+  const now = Date.now();
+  const clients = { total: tenants.length, active: 0, trialing: 0, pastDue: 0, suspended: 0 };
+  const attention = [];
+  let signupsWeek = 0;
+  let signupsMonth = 0;
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
 
-    for (const t of tenants) {
-      const status = t.billingStatus || 'trialing';
-      if (status === 'active') clients.active += 1;
-      else if (status === 'past_due') clients.pastDue += 1;
-      else if (status === 'suspended') clients.suspended += 1;
-      else clients.trialing += 1;
+  for (const t of tenants) {
+    const status = t.billingStatus || 'trialing';
+    if (status === 'active') clients.active += 1;
+    else if (status === 'past_due') clients.pastDue += 1;
+    else if (status === 'suspended') clients.suspended += 1;
+    else clients.trialing += 1;
 
-      const created = t.createdAt ? new Date(t.createdAt).getTime() : 0;
-      if (created >= now - 7 * DAY_MS) signupsWeek += 1;
-      if (created >= monthStart.getTime()) signupsMonth += 1;
+    const created = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+    if (created >= now - 7 * DAY_MS) signupsWeek += 1;
+    if (created >= monthStart.getTime()) signupsMonth += 1;
 
-      const item = { id: t.id, businessName: nameOf(t), plan: t.plan || 'basic', planName: PLAN_NAMES[t.plan] || 'Básico' };
-      if (status === 'past_due') attention.push({ ...item, kind: 'past_due', label: 'Pago atrasado', at: t.pastDueSince || null });
-      else if (status === 'trialing' && t.trialEndsAt) {
-        const left = new Date(t.trialEndsAt).getTime() - now;
-        if (left <= 0) attention.push({ ...item, kind: 'trial_expired', label: 'Prueba vencida', at: t.trialEndsAt });
-        else if (left <= TRIAL_WARNING_DAYS * DAY_MS) attention.push({ ...item, kind: 'trial_ending', label: 'Prueba por vencer', at: t.trialEndsAt });
-      }
-      const people = users.get(String(t.id)) || [];
-      if (status !== 'suspended' && people.length && !latestLogin(people) && created < now - 3 * DAY_MS) {
-        attention.push({ ...item, kind: 'never_logged', label: 'Nunca ha entrado', at: t.createdAt || null });
-      }
+    const item = { id: t.id, businessName: nameOf(t), plan: t.plan || 'basic', planName: PLAN_NAMES[t.plan] || 'Básico' };
+    if (status === 'past_due') attention.push({ ...item, kind: 'past_due', label: 'Pago atrasado', at: t.pastDueSince || null });
+    else if (status === 'trialing' && t.trialEndsAt) {
+      const left = new Date(t.trialEndsAt).getTime() - now;
+      if (left <= 0) attention.push({ ...item, kind: 'trial_expired', label: 'Prueba vencida', at: t.trialEndsAt });
+      else if (left <= TRIAL_WARNING_DAYS * DAY_MS) attention.push({ ...item, kind: 'trial_ending', label: 'Prueba por vencer', at: t.trialEndsAt });
     }
-
-    const order = { past_due: 0, trial_expired: 1, trial_ending: 2, never_logged: 3 };
-    attention.sort((a, b) => order[a.kind] - order[b.kind]);
-
-    // Tickets que esperan al equipo, los más viejos primero
-    const { open } = await support.waitingByTenant();
-    const tenantName = new Map(tenants.map((t) => [String(t.id), nameOf(t)]));
-    const waiting = open
-      .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt))
-      .slice(0, 8)
-      .map((t) => ({ id: t.id, tenantId: t.tenantId, businessName: tenantName.get(t.tenantId) || 'Cliente', subject: t.subject, at: t.updatedAt }));
-    return res.status(200).json({ clients, signupsWeek, signupsMonth, attention, tickets: { open: open.length }, waiting });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude armar el resumen.');
+    const people = users.get(String(t.id)) || [];
+    if (status !== 'suspended' && people.length && !latestLogin(people) && created < now - 3 * DAY_MS) {
+      attention.push({ ...item, kind: 'never_logged', label: 'Nunca ha entrado', at: t.createdAt || null });
+    }
   }
-}
+
+  const order = { past_due: 0, trial_expired: 1, trial_ending: 2, never_logged: 3 };
+  attention.sort((a, b) => order[a.kind] - order[b.kind]);
+
+  // Tickets que esperan al equipo, los más viejos primero
+  const { open } = await support.waitingByTenant();
+  const tenantName = new Map(tenants.map((t) => [String(t.id), nameOf(t)]));
+  const waiting = open
+    .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt))
+    .slice(0, 8)
+    .map((t) => ({ id: t.id, tenantId: t.tenantId, businessName: tenantName.get(t.tenantId) || 'Cliente', subject: t.subject, at: t.updatedAt }));
+  return res.status(200).json({ clients, signupsWeek, signupsMonth, attention, tickets: { open: open.length }, waiting });
+});
 
 /** Historia de un cliente: cobros recibidos junto con lo que hizo el equipo sobre su negocio. */
-async function tenantActivity(req, res) {
-  try {
-    const tenant = await db.GetTenantById(req.params.id);
-    if (!tenant) return res.status(404).send('No encontré ese cliente.');
-    const [events, actions] = await Promise.all([
-      db.ListBillingEvents(tenant.id, 40),
-      db.ListPlatformAudit({ tenantId: tenant.id, limit: 60 }),
-    ]);
-    const items = [
-      ...events.map((e) => ({
-        id: `b${e.id}`,
-        type: e.type,
-        message: e.note || e.type,
-        amount: e.amount ?? null,
-        actor: '',
-        at: e.at,
-      })),
-      ...actions.map((a) => ({ id: `a${a.id}`, type: a.type, message: a.message, amount: null, actor: a.actor || '', at: a.createdAt })),
-    ]
-      .filter((i) => i.at)
-      .sort((a, b) => new Date(b.at) - new Date(a.at))
-      .slice(0, 60);
-    return res.status(200).json({ items });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude leer la actividad.');
-  }
-}
+const tenantActivity = handle('No pude leer la actividad.', async (req, res) => {
+  const tenant = await db.GetTenantById(req.params.id);
+  if (!tenant) return res.status(404).send('No encontré ese cliente.');
+  const [events, actions] = await Promise.all([
+    db.ListBillingEvents(tenant.id, 40),
+    db.ListPlatformAudit({ tenantId: tenant.id, limit: 60 }),
+  ]);
+  const items = [
+    ...events.map((e) => ({
+      id: `b${e.id}`,
+      type: e.type,
+      message: e.note || e.type,
+      amount: e.amount ?? null,
+      actor: '',
+      at: e.at,
+    })),
+    ...actions.map((a) => ({ id: `a${a.id}`, type: a.type, message: a.message, amount: null, actor: a.actor || '', at: a.createdAt })),
+  ]
+    .filter((i) => i.at)
+    .sort((a, b) => new Date(b.at) - new Date(a.at))
+    .slice(0, 60);
+  return res.status(200).json({ items });
+});
 
 /** Últimos movimientos del equipo en toda la plataforma (solo admin). */
-async function activity(req, res) {
-  try {
-    const rows = await db.ListPlatformAudit({ limit: Number(req.query.limit) || 60 });
-    const tenantIds = [...new Set(rows.map((r) => r.tenantId).filter(Boolean))];
-    const [tenants, settings] = await Promise.all([db.ListTenants(), db.GetSettingsMany(tenantIds)]);
-    const byId = new Map(tenants.map((t) => [String(t.id), t]));
-    const nameOf = (id) => settings.get(id)?.businessName || byId.get(id)?.name || 'Cliente';
-    return res.status(200).json({
-      items: rows.map((r) => ({
-        id: r.id,
-        type: r.type,
-        message: r.message,
-        actor: r.actor || '',
-        tenantId: r.tenantId || null,
-        businessName: r.tenantId ? nameOf(r.tenantId) : '',
-        at: r.createdAt,
-      })),
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude leer la actividad.');
-  }
-}
+const activity = handle('No pude leer la actividad.', async (req, res) => {
+  const rows = await db.ListPlatformAudit({ limit: Number(req.query.limit) || 60 });
+  const tenantIds = [...new Set(rows.map((r) => r.tenantId).filter(Boolean))];
+  const [tenants, settings] = await Promise.all([db.ListTenants(), db.GetSettingsMany(tenantIds)]);
+  const byId = new Map(tenants.map((t) => [String(t.id), t]));
+  const nameOf = (id) => settings.get(id)?.businessName || byId.get(id)?.name || 'Cliente';
+  return res.status(200).json({
+    items: rows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      message: r.message,
+      actor: r.actor || '',
+      tenantId: r.tenantId || null,
+      businessName: r.tenantId ? nameOf(r.tenantId) : '',
+      at: r.createdAt,
+    })),
+  });
+});
 
 // ——— Finanzas ———
 async function financeBooks(month) {
@@ -397,104 +353,84 @@ async function financeBooks(month) {
 }
 
 /** Números del mes: cobrado, esperado, gastos, utilidad, tendencia. `?format=csv` baja los cobros del mes. */
-async function financeSummary(req, res) {
-  try {
-    const month = String(req.query.month || finance.monthKey());
-    if (!finance.monthRange(month)) return res.status(400).send('El mes debe ser AAAA-MM.');
-    const books = await financeBooks(month);
-    if (req.query.format === 'csv') {
-      res.set('Content-Type', 'text/csv; charset=utf-8');
-      res.set('Content-Disposition', `attachment; filename="cobros_${month}.csv"`);
-      return res.status(200).send(finance.csvOf(books));
-    }
-    return res.status(200).json(books);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude armar las finanzas.');
+const financeSummary = handle('No pude armar las finanzas.', async (req, res) => {
+  const month = String(req.query.month || finance.monthKey());
+  if (!finance.monthRange(month)) return res.status(400).send('El mes debe ser AAAA-MM.');
+  const books = await financeBooks(month);
+  if (req.query.format === 'csv') {
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="cobros_${month}.csv"`);
+    return res.status(200).send(finance.csvOf(books));
   }
-}
+  return res.status(200).json(books);
+});
 
-async function createExpense(req, res) {
-  try {
-    const label = String(req.body?.label || '').trim();
-    const amount = Number(req.body?.amount);
-    if (label.length < 2) return res.status(400).send('Escribe qué gasto es.');
-    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).send('Escribe un monto mayor a cero.');
-    const created = await db.CreatePlatformExpense({
-      label: label.slice(0, 80),
-      amount: finance.round2(amount),
-      note: String(req.body?.note || '').trim().slice(0, 200),
-      month: finance.monthKey(),
-      createdAt: new Date(),
-    });
-    await audit.record(req, {
-      type: 'expense_created',
-      message: `Anotó el gasto «${created.label}» por $${Number(created.amount).toFixed(2)}`,
-      meta: { id: created.id, amount: created.amount },
-    });
-    return res.status(201).json({ id: created.id, label: created.label, amount: created.amount, note: created.note, month: created.month, createdAt: created.createdAt });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude guardar el gasto.');
-  }
-}
+const createExpense = handle('No pude guardar el gasto.', async (req, res) => {
+  const label = String(req.body?.label || '').trim();
+  const amount = Number(req.body?.amount);
+  if (label.length < 2) return res.status(400).send('Escribe qué gasto es.');
+  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).send('Escribe un monto mayor a cero.');
+  const created = await db.CreatePlatformExpense({
+    label: label.slice(0, 80),
+    amount: finance.round2(amount),
+    note: String(req.body?.note || '').trim().slice(0, 200),
+    month: finance.monthKey(),
+    createdAt: new Date(),
+  });
+  await audit.record(req, {
+    type: 'expense_created',
+    message: `Anotó el gasto «${created.label}» por $${Number(created.amount).toFixed(2)}`,
+    meta: { id: created.id, amount: created.amount },
+  });
+  return res.status(201).json({ id: created.id, label: created.label, amount: created.amount, note: created.note, month: created.month, createdAt: created.createdAt });
+});
 
-async function deleteExpense(req, res) {
-  try {
-    if (!(await db.DeletePlatformExpense(req.params.id))) return res.status(404).send('No encontré ese gasto.');
-    await audit.record(req, { type: 'expense_deleted', message: 'Quitó un gasto', meta: { id: req.params.id } });
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude quitar el gasto.');
-  }
-}
+const deleteExpense = handle('No pude quitar el gasto.', async (req, res) => {
+  if (!(await db.DeletePlatformExpense(req.params.id))) return res.status(404).send('No encontré ese gasto.');
+  await audit.record(req, { type: 'expense_deleted', message: 'Quitó un gasto', meta: { id: req.params.id } });
+  return res.status(200).json({ ok: true });
+});
 
 /**
  * Pago recibido fuera de la app (transferencia, efectivo). Activa el negocio y extiende su periodo pagado
  * por los meses indicados (se cuenta desde el fin del periodo vigente, o desde hoy si ya venció).
  */
-async function manualPayment(req, res) {
-  try {
-    const tenant = await db.GetTenantById(req.params.id);
-    if (!tenant) return res.status(404).send('No encontré ese cliente.');
-    const amount = Number(req.body?.amount);
-    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).send('Escribe un monto mayor a cero.');
-    const months = req.body?.months == null || req.body.months === '' ? 1 : Number(req.body.months);
-    if (!Number.isInteger(months) || months < 1 || months > 36) {
-      return res.status(400).send('Los meses deben ser un número entero de 1 a 36.');
-    }
-    const note = String(req.body?.note || '').trim().slice(0, 200) || 'Cobro registrado a mano';
-
-    await db.CreateBillingEvent({ tenantId: tenant.id, type: 'payment', plan: tenant.plan, amount: finance.round2(amount), months, note });
-
-    const now = new Date();
-    const current = tenant.currentPeriodEnd ? new Date(tenant.currentPeriodEnd) : null;
-    const stillPaid = current && !Number.isNaN(current.getTime()) && current > now && tenant.billingStatus === 'active';
-    const periodEnd = new Date(stillPaid ? current : now);
-    periodEnd.setMonth(periodEnd.getMonth() + months);
-    await db.UpdateTenant(tenant.id, { billingStatus: 'active', suspendedAt: null, suspendedReason: null, currentPeriodEnd: periodEnd });
-
-    // Si el negocio llegó con un vendedor, este cobro le genera su comisión
-    const commission = await referrals
-      .recordPayment({ tenant, amount, source: 'manual', key: `manual:${tenant.id}:${Date.now()}`, note })
-      .catch((e) => {
-        console.warn('[referidos] no se pudo registrar la comisión:', e.message);
-        return null;
-      });
-
-    await audit.record(req, {
-      tenantId: tenant.id,
-      type: 'manual_payment',
-      message: `Registró un pago de $${amount.toFixed(2)} por ${months} ${months === 1 ? 'mes' : 'meses'} (paga hasta ${periodEnd.toISOString().slice(0, 10)})${commission ? ` (comisión $${commission.commission.toFixed(2)})` : ''}`,
-      meta: { amount, months },
-    });
-    return res.status(201).json({ ok: true, currentPeriodEnd: periodEnd, commission });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude registrar el pago.');
+const manualPayment = handle('No pude registrar el pago.', async (req, res) => {
+  const tenant = await db.GetTenantById(req.params.id);
+  if (!tenant) return res.status(404).send('No encontré ese cliente.');
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).send('Escribe un monto mayor a cero.');
+  const months = req.body?.months == null || req.body.months === '' ? 1 : Number(req.body.months);
+  if (!Number.isInteger(months) || months < 1 || months > 36) {
+    return res.status(400).send('Los meses deben ser un número entero de 1 a 36.');
   }
-}
+  const note = String(req.body?.note || '').trim().slice(0, 200) || 'Cobro registrado a mano';
+
+  await db.CreateBillingEvent({ tenantId: tenant.id, type: 'payment', plan: tenant.plan, amount: finance.round2(amount), months, note });
+
+  const now = new Date();
+  const current = tenant.currentPeriodEnd ? new Date(tenant.currentPeriodEnd) : null;
+  const stillPaid = current && !Number.isNaN(current.getTime()) && current > now && tenant.billingStatus === 'active';
+  const periodEnd = new Date(stillPaid ? current : now);
+  periodEnd.setMonth(periodEnd.getMonth() + months);
+  await db.UpdateTenant(tenant.id, { billingStatus: 'active', suspendedAt: null, suspendedReason: null, currentPeriodEnd: periodEnd });
+
+  // Si el negocio llegó con un vendedor, este cobro le genera su comisión
+  const commission = await referrals
+    .recordPayment({ tenant, amount, source: 'manual', key: `manual:${tenant.id}:${Date.now()}`, note })
+    .catch((e) => {
+      console.warn('[referidos] no se pudo registrar la comisión:', e.message);
+      return null;
+    });
+
+  await audit.record(req, {
+    tenantId: tenant.id,
+    type: 'manual_payment',
+    message: `Registró un pago de $${amount.toFixed(2)} por ${months} ${months === 1 ? 'mes' : 'meses'} (paga hasta ${periodEnd.toISOString().slice(0, 10)})${commission ? ` (comisión $${commission.commission.toFixed(2)})` : ''}`,
+    meta: { amount, months },
+  });
+  return res.status(201).json({ ok: true, currentPeriodEnd: periodEnd, commission });
+});
 
 // ——— Soporte: bandeja y tickets (admin y soporte) ———
 const supportFail = (res, err) => {
@@ -779,111 +715,91 @@ function publicStaff(user) {
   };
 }
 
-async function listStaff(req, res) {
-  try {
-    return res.status(200).json((await db.ListPlatformUsers()).map(publicStaff));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude cargar el equipo.');
-  }
-}
+const listStaff = handle('No pude cargar el equipo.', async (req, res) => {
+  return res.status(200).json((await db.ListPlatformUsers()).map(publicStaff));
+});
 
-async function createStaff(req, res) {
-  try {
-    const body = req.body || {};
-    const name = String(body.name || '').trim();
-    const lastName = String(body.lastName || '').trim();
-    const email = String(body.email || '').trim().toLowerCase();
-    const username = String(body.username || '').trim().toLowerCase();
-    const password = String(body.password || '');
-    const role = body.role === 'platform_support' ? 'platform_support' : 'platform_admin';
-    if (name.length < 2) return res.status(400).send('Escribe el nombre.');
-    if (!lastName) return res.status(400).send('Escribe el apellido.');
-    if (!email.includes('@')) return res.status(400).send('Escribe un correo válido.');
-    if (!/^[a-z0-9._-]{3,30}$/.test(username)) {
-      return res.status(400).send('El usuario debe tener 3 a 30 letras, números, punto o guion.');
-    }
-    if (password.length < 8) return res.status(400).send('La contraseña debe tener al menos 8 caracteres.');
-    if (password.toLowerCase().includes(username)) return res.status(400).send('La contraseña no puede contener el usuario.');
-    if (await db.FindUserByUsername(username)) return res.status(400).send('Ese usuario ya existe.');
-    if (await db.FindUserByEmail(email)) return res.status(400).send('Ese correo ya está registrado.');
-
-    const now = new Date();
-    const result = await db.CreateUser({
-      name,
-      lastName,
-      email,
-      username,
-      password: await hasher.hashPassword(password),
-      cellphone: String(body.cellphone || '').replace(/\D/g, '').slice(0, 10) || '0000000000',
-      role,
-      tenantId: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-    await audit.record(req, {
-      type: 'staff_created',
-      message: `Agregó a ${name} ${lastName} al equipo como ${STAFF_ROLE_NAMES[role]}`,
-      meta: { username, role },
-    });
-    return res.status(201).json(publicStaff({ id: String(result.insertedId), name, lastName, username, email, role, createdAt: now }));
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude crear a esa persona.');
+const createStaff = handle('No pude crear a esa persona.', async (req, res) => {
+  const body = req.body || {};
+  const name = String(body.name || '').trim();
+  const lastName = String(body.lastName || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const username = String(body.username || '').trim().toLowerCase();
+  const password = String(body.password || '');
+  const role = body.role === 'platform_support' ? 'platform_support' : 'platform_admin';
+  if (name.length < 2) return res.status(400).send('Escribe el nombre.');
+  if (!lastName) return res.status(400).send('Escribe el apellido.');
+  if (!email.includes('@')) return res.status(400).send('Escribe un correo válido.');
+  if (!/^[a-z0-9._-]{3,30}$/.test(username)) {
+    return res.status(400).send('El usuario debe tener 3 a 30 letras, números, punto o guion.');
   }
-}
+  if (password.length < 8) return res.status(400).send('La contraseña debe tener al menos 8 caracteres.');
+  if (password.toLowerCase().includes(username)) return res.status(400).send('La contraseña no puede contener el usuario.');
+  if (await db.FindUserByUsername(username)) return res.status(400).send('Ese usuario ya existe.');
+  if (await db.FindUserByEmail(email)) return res.status(400).send('Ese correo ya está registrado.');
 
-async function deleteStaff(req, res) {
-  try {
-    const id = String(req.params.id || '');
-    const target = (await db.ListPlatformUsers()).find((user) => user.id === id);
-    if (!target) return res.status(404).send('No encontré a esa persona.');
-    if (target.username === req.user.username) return res.status(400).send('No puedes quitarte a ti mismo.');
-    if (target.role === 'platform_admin' && (await db.CountPlatformAdmins()) <= 1) {
-      return res.status(400).send('Debe quedar al menos un admin.');
-    }
-    if (!(await db.DeleteUserById(id))) return res.status(404).send('No encontré a esa persona.');
-    await audit.record(req, {
-      type: 'staff_removed',
-      message: `Quitó a ${target.name} ${target.lastName} del equipo`,
-      meta: { username: target.username, role: target.role },
-    });
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'No pude quitar a esa persona.');
+  const now = new Date();
+  const result = await db.CreateUser({
+    name,
+    lastName,
+    email,
+    username,
+    password: await hasher.hashPassword(password),
+    cellphone: String(body.cellphone || '').replace(/\D/g, '').slice(0, 10) || '0000000000',
+    role,
+    tenantId: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await audit.record(req, {
+    type: 'staff_created',
+    message: `Agregó a ${name} ${lastName} al equipo como ${STAFF_ROLE_NAMES[role]}`,
+    meta: { username, role },
+  });
+  return res.status(201).json(publicStaff({ id: String(result.insertedId), name, lastName, username, email, role, createdAt: now }));
+});
+
+const deleteStaff = handle('No pude quitar a esa persona.', async (req, res) => {
+  const id = String(req.params.id || '');
+  const target = (await db.ListPlatformUsers()).find((user) => user.id === id);
+  if (!target) return res.status(404).send('No encontré a esa persona.');
+  if (target.username === req.user.username) return res.status(400).send('No puedes quitarte a ti mismo.');
+  if (target.role === 'platform_admin' && (await db.CountPlatformAdmins()) <= 1) {
+    return res.status(400).send('Debe quedar al menos un admin.');
   }
-}
+  if (!(await db.DeleteUserById(id))) return res.status(404).send('No encontré a esa persona.');
+  await audit.record(req, {
+    type: 'staff_removed',
+    message: `Quitó a ${target.name} ${target.lastName} del equipo`,
+    meta: { username: target.username, role: target.role },
+  });
+  return res.status(200).json({ ok: true });
+});
 
 // Uber Eats en toda la plataforma: tasa de aceptación por negocio y lo que ha fallado
-async function uberOverview(req, res) {
-  try {
-    const days = [7, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
-    const since = new Date(Date.now() - days * 24 * 3600 * 1000);
-    const [orders, links, tenants, events] = await Promise.all([
-      db.ListUberOrdersSince(null, since),
-      db.ListIntegrations('uber'),
-      db.ListTenants(),
-      db.ListUberEvents({ limit: 100 }),
-    ]);
-    const names = new Map(tenants.map((t) => [String(t.id), t.name]));
-    const byTenant = new Map();
-    for (const o of orders) byTenant.set(o.tenantId, [...(byTenant.get(o.tenantId) || []), o]);
-    // missedOrders se omite a propósito: es la lista de pedidos, no un total
-    // eslint-disable-next-line no-unused-vars
-    const strip = ({ missedOrders, ...s }) => s;
-    const rows = links.map((l) => ({ tenantId: l.tenantId, name: names.get(l.tenantId) || 'Negocio', storeId: l.storeId, ...strip(uberStats.acceptanceStats(byTenant.get(l.tenantId) || [])) }));
-    return res.status(200).json({
-      days,
-      totals: strip(uberStats.acceptanceStats(orders)),
-      tenants: rows.sort((a, b) => (a.rate ?? 2) - (b.rate ?? 2)), // los que van peor, primero
-      events: events.map((e) => ({ at: e.at, eventType: e.eventType, orderId: e.orderId, tenant: names.get(e.tenantId) || null, outcome: e.outcome, detail: e.detail || '' })),
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer Uber Eats');
-  }
-}
+const uberOverview = handle('Error al leer Uber Eats', async (req, res) => {
+  const days = [7, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 7;
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+  const [orders, links, tenants, events] = await Promise.all([
+    db.ListUberOrdersSince(null, since),
+    db.ListIntegrations('uber'),
+    db.ListTenants(),
+    db.ListUberEvents({ limit: 100 }),
+  ]);
+  const names = new Map(tenants.map((t) => [String(t.id), t.name]));
+  const byTenant = new Map();
+  for (const o of orders) byTenant.set(o.tenantId, [...(byTenant.get(o.tenantId) || []), o]);
+  // missedOrders se omite a propósito: es la lista de pedidos, no un total
+  // eslint-disable-next-line no-unused-vars
+  const strip = ({ missedOrders, ...s }) => s;
+  const rows = links.map((l) => ({ tenantId: l.tenantId, name: names.get(l.tenantId) || 'Negocio', storeId: l.storeId, ...strip(uberStats.acceptanceStats(byTenant.get(l.tenantId) || [])) }));
+  return res.status(200).json({
+    days,
+    totals: strip(uberStats.acceptanceStats(orders)),
+    tenants: rows.sort((a, b) => (a.rate ?? 2) - (b.rate ?? 2)), // los que van peor, primero
+    events: events.map((e) => ({ at: e.at, eventType: e.eventType, orderId: e.orderId, tenant: names.get(e.tenantId) || null, outcome: e.outcome, detail: e.detail || '' })),
+  });
+});
 
 module.exports = {
   uberOverview,

@@ -158,6 +158,7 @@
 </template>
 
 <script setup>
+import { errorText as message } from "../format";
 import { askConfirm } from "../dialog";
 import { computed, onMounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
@@ -200,11 +201,6 @@ function generatePassword(len = 10) {
   const bytes = new Uint32Array(len);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
-}
-
-function message(e, fallback) {
-  const d = e?.response?.data;
-  return typeof d === "string" && d ? d : fallback;
 }
 
 function flash(text) {

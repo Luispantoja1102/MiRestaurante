@@ -86,7 +86,7 @@
             <p class="al-title">{{ awaitingOrders.length === 1 ? "Pedido de plataforma por aceptar" : "Pedidos de plataforma por aceptar" }}</p>
             <p class="al-body">Acéptalos o recházalos en Caja: a los 11 minutos Uber los cancela.</p>
           </div>
-          <button type="button" class="al-go" @click="router.push('/orders')">Ir a Caja</button>
+          <button type="button" class="al-go" @click="router.push(platformOrdersTarget(awaitingOrders))">Ir a Caja</button>
         </article>
         <div v-if="platformAlerts.permission === 'default'" class="al-perm">
           <span>Activa los avisos del navegador</span>
@@ -133,7 +133,7 @@ import {
   stopWaiterAlerts,
   enableSystemAlerts,
 } from "../waiterAlerts";
-import { awaitingOrders, platformAlerts, startOrderAlerts, stopOrderAlerts, enableOrderNotifications } from "../orderAlerts";
+import { awaitingOrders, platformAlerts, platformOrdersTarget, startOrderAlerts, stopOrderAlerts, enableOrderNotifications } from "../orderAlerts";
 
 const router = useRouter();
 const route = useRoute();

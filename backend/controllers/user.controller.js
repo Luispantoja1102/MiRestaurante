@@ -8,6 +8,7 @@ const { createTenantDoc, newResetToken, ROLES } = require('../models/tenant.mode
 const { sendPasswordResetEmail } = require('../utils/mail.utils');
 const { normalizeRole, isOutsideTenant } = require('../models/roles');
 const referrals = require('../services/referral.service');
+const { handle } = require('../utils/handle');
 
 const CreateUser = async (req, res) => {
   try {
@@ -164,15 +165,10 @@ const FindUserByUsername = async (req, res) => {
   }
 };
 
-const FindWaiters = async (req, res) => {
-  try {
-    const search = await db.GetWaiters(req.tenantId);
-    return res.status(200).send(search || []);
-  } catch (err) {
-    console.error(err.message);
-    return res.status(500).send(err.message);
-  }
-};
+const FindWaiters = handle('No se pudo completar la acción.', async (req, res) => {
+  const search = await db.GetWaiters(req.tenantId);
+  return res.status(200).send(search || []);
+});
 
 const GetWaitList = async (req, res) => {
   try {
@@ -207,58 +203,48 @@ const AddWaitList = async (req, res) => {
   }
 };
 
-const ForgotPassword = async (req, res) => {
-  try {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    if (!email) return res.status(400).send('Email requerido');
+const ForgotPassword = handle('Error al solicitar restablecimiento', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).send('Email requerido');
 
-    const user = await db.FindUserByEmail(email);
-    if (!user) {
-      return res.status(200).json({ ok: true, message: 'Si el correo existe, enviamos un enlace' });
-    }
-
-    const token = newResetToken();
-    await db.UpdateUserById(String(user._id), {
-      resetToken: token,
-      resetExpires: new Date(Date.now() + 60 * 60 * 1000),
-    });
-
-    const appUrl = (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '');
-    const resetUrl = `${appUrl}/reset/${token}`;
-    const mail = await sendPasswordResetEmail({ to: email, resetUrl });
-
-    return res.status(200).json({
-      ok: true,
-      message: 'Si el correo existe, enviamos un enlace',
-      mail,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al solicitar restablecimiento');
+  const user = await db.FindUserByEmail(email);
+  if (!user) {
+    return res.status(200).json({ ok: true, message: 'Si el correo existe, enviamos un enlace' });
   }
-};
 
-const ResetPassword = async (req, res) => {
-  try {
-    const { token, password } = req.body || {};
-    if (!token || !password || String(password).length < 6) {
-      return res.status(400).send('Token y contraseña (mín. 6) requeridos');
-    }
-    const user = await db.FindUserByResetToken(token);
-    if (!user) return res.status(400).send('Token inválido o expirado');
+  const token = newResetToken();
+  await db.UpdateUserById(String(user._id), {
+    resetToken: token,
+    resetExpires: new Date(Date.now() + 60 * 60 * 1000),
+  });
 
-    const hashed = await hasher.hashPassword(password);
-    await db.UpdateUserById(String(user._id), {
-      password: hashed,
-      resetToken: null,
-      resetExpires: null,
-    });
-    return res.status(200).json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al restablecer contraseña');
+  const appUrl = (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const resetUrl = `${appUrl}/reset/${token}`;
+  const mail = await sendPasswordResetEmail({ to: email, resetUrl });
+
+  return res.status(200).json({
+    ok: true,
+    message: 'Si el correo existe, enviamos un enlace',
+    mail,
+  });
+});
+
+const ResetPassword = handle('Error al restablecer contraseña', async (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || !password || String(password).length < 6) {
+    return res.status(400).send('Token y contraseña (mín. 6) requeridos');
   }
-};
+  const user = await db.FindUserByResetToken(token);
+  if (!user) return res.status(400).send('Token inválido o expirado');
+
+  const hashed = await hasher.hashPassword(password);
+  await db.UpdateUserById(String(user._id), {
+    password: hashed,
+    resetToken: null,
+    resetExpires: null,
+  });
+  return res.status(200).json({ ok: true });
+});
 
 const Me = async (req, res) => {
   let user = null;

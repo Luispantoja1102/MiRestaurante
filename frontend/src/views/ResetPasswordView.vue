@@ -15,6 +15,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { apiService } from "../apiService";
@@ -39,7 +40,7 @@ async function submit() {
     msg.value = "Contraseña actualizada. Ya puedes ingresar.";
     setTimeout(() => router.push("/login"), 1200);
   } catch (e) {
-    err.value = e.response?.data || "Token inválido o expirado";
+    err.value = errorText(e, "Token inválido o expirado");
   } finally {
     loading.value = false;
   }

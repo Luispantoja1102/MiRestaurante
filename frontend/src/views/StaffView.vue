@@ -64,6 +64,7 @@
 </template>
 
 <script setup>
+import { errorText } from "../format";
 import { askConfirm } from "../dialog";
 import { onMounted, reactive, ref } from "vue";
 import AppShell from "../components/AppShell.vue";
@@ -111,7 +112,7 @@ async function create() {
     form.lastName = "";
     form.cellphone = "";
   } catch (e) {
-    error.value = e.response?.data || "No se pudo crear el mesero.";
+    error.value = errorText(e, "No se pudo crear el mesero.");
   } finally {
     saving.value = false;
   }

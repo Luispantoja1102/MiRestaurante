@@ -1,5 +1,6 @@
 const support = require('../services/support.service');
 const db = require('../database/mongodb');
+const { handleWith } = require('../utils/handle');
 
 function fail(res, err) {
   if (err instanceof support.SupportError) return res.status(err.status).send(err.message);
@@ -7,13 +8,7 @@ function fail(res, err) {
   return res.status(500).send('No pude completar la acción. Intenta de nuevo.');
 }
 
-const handle = (fn) => async (req, res) => {
-  try {
-    return await fn(req, res);
-  } catch (err) {
-    return fail(res, err);
-  }
-};
+const handle = handleWith(fail); // errores de dominio con su código; lo demás, 500
 
 // Quien escribe: el token solo trae el usuario; el nombre y el correo salen de su cuenta
 const author = (req) => db.FindUserByUsername(req.user.username, req.tenantId);

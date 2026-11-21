@@ -1,6 +1,7 @@
 const db = require('../database/mongodb');
 const mp = require('../services/mercadopago.service');
 const { PLANS, isSubscriptionActive, trialEndsFrom } = require('../models/tenant.model');
+const { handle } = require('../utils/handle');
 
 function daysLeft(trialEndsAt) {
   if (!trialEndsAt) return 0;
@@ -12,25 +13,20 @@ async function getPlans(req, res) {
   return res.status(200).json({ plans: mp.listPlans(), mock: !mp.hasMpConfig() });
 }
 
-async function getStatus(req, res) {
-  try {
-    const tenant = await db.GetTenantById(req.tenantId);
-    if (!tenant) return res.status(404).send('Tenant no encontrado');
-    return res.status(200).json({
-      plan: tenant.plan || 'basic',
-      billingStatus: tenant.billingStatus || 'trialing',
-      trialEndsAt: tenant.trialEndsAt || null,
-      trialDaysLeft: daysLeft(tenant.trialEndsAt),
-      currentPeriodEnd: tenant.currentPeriodEnd || null,
-      active: isSubscriptionActive(tenant),
-      mpConfigured: mp.hasMpConfig(),
-      mpPreapprovalId: tenant.mpPreapprovalId || null,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al leer facturación');
-  }
-}
+const getStatus = handle('Error al leer facturación', async (req, res) => {
+  const tenant = await db.GetTenantById(req.tenantId);
+  if (!tenant) return res.status(404).send('Tenant no encontrado');
+  return res.status(200).json({
+    plan: tenant.plan || 'basic',
+    billingStatus: tenant.billingStatus || 'trialing',
+    trialEndsAt: tenant.trialEndsAt || null,
+    trialDaysLeft: daysLeft(tenant.trialEndsAt),
+    currentPeriodEnd: tenant.currentPeriodEnd || null,
+    active: isSubscriptionActive(tenant),
+    mpConfigured: mp.hasMpConfig(),
+    mpPreapprovalId: tenant.mpPreapprovalId || null,
+  });
+});
 
 async function checkout(req, res) {
   try {
@@ -83,38 +79,33 @@ async function checkout(req, res) {
 }
 
 /** Solo desarrollo: activar plan sin Mercado Pago */
-async function devActivate(req, res) {
-  try {
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(404).send('Not found');
-    }
-    const plan = String(req.body?.plan || 'basic');
-    if (!PLANS.includes(plan)) {
-      return res.status(400).send('plan debe ser basic o pro');
-    }
-    const periodEnd = new Date();
-    periodEnd.setMonth(periodEnd.getMonth() + 1);
-
-    const updated = await db.UpdateTenant(req.tenantId, {
-      plan,
-      billingStatus: 'active',
-      currentPeriodEnd: periodEnd,
-      suspendedAt: null,
-      suspendedReason: null,
-      mpPreapprovalId: req.body?.preapprovalId || `mock_dev_${Date.now()}`,
-    });
-
-    return res.status(200).json({
-      ok: true,
-      plan: updated.plan,
-      billingStatus: updated.billingStatus,
-      currentPeriodEnd: updated.currentPeriodEnd,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).send(err.message || 'Error al activar');
+const devActivate = handle('Error al activar', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).send('Not found');
   }
-}
+  const plan = String(req.body?.plan || 'basic');
+  if (!PLANS.includes(plan)) {
+    return res.status(400).send('plan debe ser basic o pro');
+  }
+  const periodEnd = new Date();
+  periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+  const updated = await db.UpdateTenant(req.tenantId, {
+    plan,
+    billingStatus: 'active',
+    currentPeriodEnd: periodEnd,
+    suspendedAt: null,
+    suspendedReason: null,
+    mpPreapprovalId: req.body?.preapprovalId || `mock_dev_${Date.now()}`,
+  });
+
+  return res.status(200).json({
+    ok: true,
+    plan: updated.plan,
+    billingStatus: updated.billingStatus,
+    currentPeriodEnd: updated.currentPeriodEnd,
+  });
+});
 
 async function webhook(req, res) {
   try {
