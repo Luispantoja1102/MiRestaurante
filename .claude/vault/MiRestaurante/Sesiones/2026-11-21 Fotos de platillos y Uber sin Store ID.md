@@ -31,3 +31,7 @@ Subir fotos de los platillos como en MiTiendita (tarjetas de tamaño fijo), que 
 - Se borró `PUT /integrations/uber` (`uberLink`) del backend. Ahora la tienda solo se vincula con «Conectar con Uber Eats» (OAuth). Contradicción visible: la nota [[MiRestaurante/Sesiones/2026-11-16 Integración Uber Eats]] y la guía de salida a producción hablan de pegar el Store ID; manda el código.
 - Se conserva la lógica de vínculos `linkedVia: 'manual'` ya guardados (negocios que vincularon antes): se pueden desvincular y no se apagan en Uber.
 - Pruebas: las que vinculaban por la ruta ahora siembran la integración directo; 335 pasan.
+
+## Revisión en pantalla (2026-11-21)
+- Con el frontend real y la API simulada en el navegador (sin MongoDB: este entorno no tiene el daemon de Docker): tarjetas 3:2 en Menú y Caja (mostrador), las que no tienen foto quedan compactas; diálogo de recorte 3:2; con una foto de 3000×2000 el asistente guarda un WebP de 1200×800 de ~45 000 caracteres y la vista previa 3:2 se ve bien.
+- Sin probar: subir la foto contra el servidor real y que Uber la descargue (solo en el sandbox de Uber).
