@@ -5,6 +5,7 @@ const { requireAuth, requireActiveSubscription, requireRoles } = require('../mid
 const readRoles = requireRoles('admin', 'cashier', 'waiter', 'kitchen');
 const writeRoles = requireRoles('admin');
 
+router.get('/:id/image', menus.foodImage); // pública: Uber Eats descarga la foto sin sesión
 router.get('/', requireAuth, requireActiveSubscription, readRoles, menus.listFoods);
 router.get('/:id', requireAuth, requireActiveSubscription, readRoles, menus.getFood);
 router.post('/', requireAuth, requireActiveSubscription, writeRoles, menus.createFood);

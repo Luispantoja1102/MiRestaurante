@@ -23,7 +23,7 @@
         de esa tienda en lugar de la tableta de Uber Eats.
       </p>
     </template>
-    <p v-else-if="uber.configured" class="uc-hint">La conexión directa con Uber no está configurada en el servidor: vincula tu tienda con el Store ID.</p>
+    <p v-else-if="uber.configured" class="uc-hint">La conexión directa con Uber no está configurada en el servidor. Pide a quien administra la plataforma que la configure.</p>
 
     <template v-if="uber.storeId && uber.linkedVia === 'oauth'">
       <button type="button" class="uc-link" :disabled="busy" @click="removeAll">Quitar la tienda por completo en Uber Eats</button>

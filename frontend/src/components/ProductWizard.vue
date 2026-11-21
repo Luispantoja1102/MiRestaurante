@@ -33,8 +33,18 @@
             <p class="price-preview">El cliente paga {{ money(customerPrice) }}<template v-if="form.priceIncludesTax && ivaInside > 0"> · incluye {{ money(ivaInside) }} de IVA ({{ taxPercent }}%)</template></p>
           </div>
           <label>Descripción <em>(opcional)</em><input v-model="form.description" maxlength="300" autocomplete="off" /></label>
-          <label>Imagen <em>(opcional, URL)</em><input v-model="form.imgUrl" type="url" placeholder="https://…" autocomplete="off" /></label>
-          <div v-if="form.imgUrl" class="preview"><img :src="form.imgUrl" alt="Vista previa" /></div>
+          <div class="photo">
+            <span class="photo-label">Foto <em>(opcional; también se sube a Uber Eats)</em></span>
+            <div v-if="form.imgUrl" class="preview"><img :src="form.imgUrl" alt="Vista previa" @error="form.imgUrl = ''" /></div>
+            <div class="photo-row">
+              <button type="button" class="btn-photo" @click="$refs.photoCamera.click()">Tomar foto</button>
+              <button type="button" class="btn-photo" @click="$refs.photoInput.click()">{{ form.imgUrl ? "Cambiar foto" : "Galería" }}</button>
+              <button v-if="form.imgUrl" type="button" class="btn-photo danger" @click="form.imgUrl = ''">Quitar</button>
+              <input ref="photoCamera" type="file" accept="image/*" capture="environment" hidden @change="onPhoto" />
+              <input ref="photoInput" type="file" accept="image/*" hidden @change="onPhoto" />
+            </div>
+          </div>
+          <PhotoCropDialog :file="photoFile" @done="onCropped" @cancel="photoFile = null" />
         </section>
 
         <!-- 2 · Receta -->
@@ -156,6 +166,7 @@
 import { askConfirm } from "../dialog";
 import { computed, reactive, ref } from "vue";
 import { apiService } from "../apiService";
+import PhotoCropDialog from "./PhotoCropDialog.vue";
 import { UNIT_OPTIONS, qtyWithUnit, unitShort } from "../inventoryUnits";
 import { consumptionFor, priceWithExtras, round2 } from "../recipeMath";
 import { venueStore } from "../venueStore";
@@ -175,6 +186,16 @@ const STEPS = [
   { n: 4, label: "Resumen" },
 ];
 const money = (n) => Number(n || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+
+const photoFile = ref(null);
+function onPhoto(e) {
+  photoFile.value = e.target.files?.[0] || null;
+  e.target.value = "";
+}
+function onCropped(dataUrl) {
+  form.imgUrl = dataUrl;
+  photoFile.value = null;
+}
 
 const step = ref(1);
 const saving = ref(false);
@@ -349,8 +370,14 @@ async function remove() {
 .iva-card.on { border-color: var(--mirestaurante-primary); background: var(--mirestaurante-primary-soft); }
 .iva-card:focus-within { outline: 3px solid color-mix(in srgb, var(--mirestaurante-primary) 40%, transparent); outline-offset: 2px; }
 .price-preview { margin: 0; font-size: 0.9rem; font-weight: 700; }
-.preview { border-radius: 0.8rem; overflow: hidden; max-height: 9rem; background: var(--mirestaurante-surface); }
-.preview img { width: 100%; max-height: 9rem; object-fit: cover; display: block; }
+.photo { display: grid; gap: 0.4rem; }
+.photo-label { font-size: 0.86rem; font-weight: 600; }
+.photo-label em { font-weight: 500; color: var(--mirestaurante-muted); font-style: normal; }
+.preview { border-radius: 0.8rem; overflow: hidden; aspect-ratio: 3 / 2; max-width: 15rem; background: var(--mirestaurante-surface); }
+.preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.btn-photo { min-height: 2.5rem; padding: 0 0.9rem; border-radius: 0.7rem; border: 1.5px solid var(--mirestaurante-line); background: var(--mirestaurante-panel-elevated); color: var(--mirestaurante-ink); font: inherit; font-weight: 700; cursor: pointer; }
+.btn-photo.danger { color: var(--mirestaurante-danger); }
 
 .lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .line { display: grid; grid-template-columns: minmax(0, 1fr) 9rem auto; gap: 0.5rem; align-items: center; padding: 0.55rem 0.7rem; border-radius: 0.8rem; background: var(--mirestaurante-surface); }

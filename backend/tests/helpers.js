@@ -37,6 +37,9 @@ function createFakeDb() {
     GetMenuById: async (id, t) => state.menus.find((m) => m.id === id && m.tenantId === t) || null,
     CreateFood: async (d) => { const f = { ...d, id: String(new ObjectId()) }; state.foods.push(f); return f; },
     UpdateFood: async (id, patch, t) => { const f = state.foods.find((x) => x.id === id && x.tenantId === t); if (!f) return null; const clean = { ...patch }; delete clean.id; delete clean._id; delete clean.tenantId; Object.assign(f, clean); return f; },
+    SaveFoodImage: async (id, t, img) => { state.images = { ...(state.images || {}), [id]: { ...img, tenantId: t } }; },
+    GetFoodImage: async (id) => (state.images || {})[id] || null,
+    DeleteFoodImage: async (id, t) => { if ((state.images || {})[id]?.tenantId === t) delete state.images[id]; },
     GetOrderById: async (id, t) => state.orders.find((o) => o.id === id && o.tenantId === t) || null,
     UpdateOrder: async (id, patch, t) => { const o = state.orders.find((x) => x.id === id && x.tenantId === t); if (!o) return null; Object.assign(o, patch); return o; },
     // —— inventario (misma semántica que database/mongodb.js)

@@ -637,7 +637,10 @@ async function UpdateMenu(id, data, tenantId) {
 async function DeleteMenu(id, tenantId) {
   const filter = oidFilter(id, tenantId);
   if (!filter) return { deletedCount: 0 };
-  await dbConnection.collection('foods').deleteMany({ menuId: String(id), ...(tenantId ? { tenantId } : {}) });
+  const foodFilter = { menuId: String(id), ...(tenantId ? { tenantId } : {}) };
+  const ids = (await dbConnection.collection('foods').find(foodFilter, { projection: { _id: 1 } }).toArray()).map((f) => String(f._id));
+  if (ids.length) await dbConnection.collection('food_images').deleteMany({ foodId: { $in: ids } });
+  await dbConnection.collection('foods').deleteMany(foodFilter);
   return await dbConnection.collection('menus').deleteOne(filter);
 }
 async function GetFoods(tenantId) {
@@ -664,7 +667,18 @@ async function UpdateFood(id, data, tenantId) {
 async function DeleteFood(id, tenantId) {
   const filter = oidFilter(id, tenantId);
   if (!filter) return { deletedCount: 0 };
+  await dbConnection.collection('food_images').deleteOne({ foodId: String(id), ...(tenantId ? { tenantId } : {}) });
   return await dbConnection.collection('foods').deleteOne(filter);
+}
+// Foto del platillo (ya reducida en el navegador): vive aparte para no engordar la lista del menú
+async function SaveFoodImage(foodId, tenantId, { mime, data }) {
+  await dbConnection.collection('food_images').updateOne({ foodId: String(foodId) }, { $set: { tenantId, mime, data, updatedAt: new Date() } }, { upsert: true });
+}
+async function GetFoodImage(foodId) {
+  return await dbConnection.collection('food_images').findOne({ foodId: String(foodId) });
+}
+async function DeleteFoodImage(foodId, tenantId) {
+  await dbConnection.collection('food_images').deleteOne({ foodId: String(foodId), tenantId });
 }
 
 async function AddWaiter(data) {
@@ -933,7 +947,7 @@ module.exports = {
   AddWaitList, GetWaitList, GetWaitListByNumber, DeleteWaitList,
   GetSettings, CreateSettings, UpdateSettings,
   GetMenus, GetMenuById, CreateMenu, UpdateMenu, DeleteMenu,
-  GetFoods, GetFoodById, CreateFood, UpdateFood, DeleteFood,
+  GetFoods, GetFoodById, CreateFood, UpdateFood, DeleteFood, SaveFoodImage, GetFoodImage, DeleteFoodImage,
   GetOrders, GetAwaitingExternalOrders, GetOrderById, CreateOrder, UpdateOrder, GetOrdersByCashSession, GetOrderByClientRef, GetOrderByExternal, NextCounter,
   GetIntegrationByStore, GetIntegrationByTenant, SaveIntegration, DeleteIntegration,
   SaveUberPending, GetUberPending, DeleteUberPending,

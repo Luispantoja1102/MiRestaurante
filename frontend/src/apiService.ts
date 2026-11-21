@@ -394,9 +394,6 @@ export const apiService = {
   uberStatus() {
     return axios.get('/integrations/uber').then((r) => r.data);
   },
-  uberLink(storeId: string) {
-    return axios.put('/integrations/uber', { storeId }).then((r) => r.data);
-  },
   uberUnlink() {
     return axios.delete('/integrations/uber').then((r) => r.data);
   },

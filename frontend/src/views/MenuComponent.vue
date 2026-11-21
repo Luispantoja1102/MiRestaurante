@@ -402,7 +402,7 @@ export default {
 .thumb {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 2;
   border-radius: 0.8rem;
   overflow: hidden;
   background: color-mix(in srgb, var(--mirestaurante-ink) 5%, transparent);

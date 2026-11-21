@@ -89,13 +89,41 @@ async function getFood(req, res) {
   }
 }
 
+// La foto llega ya reducida desde el navegador (JPEG). Se guarda aparte y el platillo apunta a una dirección https pública,
+// que es lo único que Uber Eats acepta como `image_url`.
+const IMAGE_DATA = /^data:image\/(jpeg|webp|png);base64,([A-Za-z0-9+/]+=*)$/;
+const MAX_IMAGE_BYTES = 300 * 1024;
+
+function parseImage(imgUrl) {
+  const m = IMAGE_DATA.exec(imgUrl);
+  if (!m) return null;
+  const data = Buffer.from(m[2], 'base64');
+  if (data.length > MAX_IMAGE_BYTES) throw new RecipeError('La foto pesa demasiado; elige una más sencilla');
+  return { mime: `image/${m[1]}`, data };
+}
+
+const imageUrl = (req, id) => `${(process.env.API_PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '')}/foods/${id}/image?v=${Date.now()}`;
+
+/** Foto pública de un platillo (sin sesión: la descarga Uber Eats). */
+async function foodImage(req, res) {
+  try {
+    const img = await db.GetFoodImage(req.params.id);
+    if (!img) return res.status(404).send('Sin foto');
+    res.set({ 'Content-Type': img.mime, 'Cache-Control': 'public, max-age=31536000, immutable' });
+    return res.status(200).send(Buffer.isBuffer(img.data) ? img.data : img.data.buffer); // Mongo la devuelve como Binary
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('Error al obtener la foto');
+  }
+}
+
 const foodSchema = Joi.object({
   name: Joi.string().trim().min(1).max(80).required().messages({ 'any.required': 'El nombre es obligatorio', 'string.empty': 'El nombre es obligatorio', 'string.max': 'El nombre es demasiado largo (máximo 80 caracteres)' }),
   price: Joi.number().min(0).max(1e6).required().messages({ 'any.required': 'El precio es obligatorio', 'number.base': 'El precio debe ser un número', 'number.min': 'El precio no puede ser negativo' }),
   // ¿El precio ya incluye el IVA? (lo que paga el cliente). Sin dato sí lo incluye.
   priceIncludesTax: Joi.boolean().default(true),
   description: Joi.string().trim().max(300).allow('').default(''),
-  imgUrl: Joi.string().trim().max(2000).allow('').default(''),
+  imgUrl: Joi.string().trim().max(450000).allow('').default(''),
   menuId: Joi.string().required().messages({ 'any.required': 'Falta la categoría (menuId)' }),
 }).options({ stripUnknown: true });
 
@@ -120,12 +148,18 @@ async function createFood(req, res) {
     if (body.recipe !== undefined || body.extras !== undefined) {
       Object.assign(extra, normalizeRecipe({ recipe: body.recipe, extras: body.extras }, await ingredientsMap(req.tenantId)));
     }
-    const created = await db.CreateFood({
+    const image = parseImage(value.imgUrl);
+    let created = await db.CreateFood({
       ...value,
+      imgUrl: image ? '' : value.imgUrl,
       recipe: extra.recipe || [],
       extras: extra.extras || [],
       tenantId: req.tenantId,
     });
+    if (image) {
+      await db.SaveFoodImage(created.id, req.tenantId, image);
+      created = await db.UpdateFood(created.id, { imgUrl: imageUrl(req, created.id) }, req.tenantId);
+    }
     menuChanged(req);
     return res.status(201).json(created);
   } catch (err) {
@@ -150,6 +184,16 @@ async function updateFood(req, res) {
     }
     if (body.recipe !== undefined || body.extras !== undefined) {
       Object.assign(patch, normalizeRecipe({ recipe: body.recipe, extras: body.extras }, await ingredientsMap(req.tenantId)));
+    }
+    const image = patch.imgUrl ? parseImage(patch.imgUrl) : null;
+    if (image || patch.imgUrl === '') {
+      if (!(await db.GetFoodById(req.params.id, req.tenantId))) return res.status(404).send('Platillo no encontrado');
+      if (image) {
+        await db.SaveFoodImage(req.params.id, req.tenantId, image);
+        patch.imgUrl = imageUrl(req, req.params.id);
+      } else {
+        await db.DeleteFoodImage(req.params.id, req.tenantId); // «Quitar foto»
+      }
     }
     const updated = await db.UpdateFood(req.params.id, patch, req.tenantId);
     if (!updated) return res.status(404).send('Platillo no encontrado');
@@ -187,4 +231,5 @@ module.exports = {
   createFood,
   updateFood,
   deleteFood,
+  foodImage,
 };

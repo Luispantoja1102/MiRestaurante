@@ -619,7 +619,7 @@ onUnmounted(() => live.stop());
 .tile.picked { border-color: var(--mirestaurante-primary); background: var(--mirestaurante-primary-soft); }
 .tile.sk { min-height: 6.4rem; background: var(--mirestaurante-surface); animation: sk 1.2s ease-in-out infinite; box-shadow: none; }
 @keyframes sk { 50% { opacity: 0.5; } }
-.thumb { display: block; height: 3.4rem; border-radius: 0.6rem; overflow: hidden; background: var(--mirestaurante-surface); }
+.thumb { display: block; width: 100%; aspect-ratio: 3 / 2; border-radius: 0.6rem; overflow: hidden; background: var(--mirestaurante-surface); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .tile-name { font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
 .tile-price { color: var(--mirestaurante-muted); font-weight: 600; font-size: 0.9rem; }

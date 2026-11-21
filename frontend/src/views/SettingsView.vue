@@ -167,15 +167,6 @@
 
           <UberConnect v-if="uber.loaded && uber.configured" :uber="uber" :choose="uberChoose" @changed="loadUber" @message="(m) => { message = m; messageIsError = false; }" />
 
-          <details class="uber-manual" :open="uber.loaded && !uber.oauth">
-            <summary>Vincular con el Store ID (avanzado)</summary>
-            <form class="pass-form" @submit.prevent="linkUber">
-              <label>Store ID de tu tienda en Uber Eats
-                <input v-model.trim="uber.storeInput" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Pega aquí el Store ID" required />
-              </label>
-              <button type="submit" class="btn-primary" :disabled="uber.busy">{{ uber.storeId ? "Cambiar tienda" : "Vincular tienda" }}</button>
-            </form>
-          </details>
           <p v-if="uber.storeId" class="ok" role="status">
             Vinculada: <strong v-if="uber.storeName">{{ uber.storeName }}</strong> <code>{{ uber.storeId }}</code>
             <button type="button" class="link-btn" :disabled="uber.busy" @click="unlinkUber">Desvincular</button>
@@ -570,7 +561,7 @@ async function removeInvite(i) {
 
 // ——— Uber Eats ———
 const uber = reactive({
-  loaded: false, configured: false, oauth: false, environment: "sandbox", storeId: "", storeInput: "", storeName: "", storeAddress: "",
+  loaded: false, configured: false, oauth: false, environment: "sandbox", storeId: "", storeName: "", storeAddress: "",
   linkedVia: "", integrationEnabled: null, deprovisioned: false, busy: false, error: "",
 });
 const uberChoose = ref(false); // al volver de Uber con varias tiendas: toca elegir
@@ -584,28 +575,12 @@ async function loadUber() {
   try {
     const s = await apiService.uberStatus();
     Object.assign(uber, {
-      loaded: true, configured: s.configured, environment: s.environment, storeId: s.storeId || "", storeInput: s.storeId || "",
+      loaded: true, configured: s.configured, environment: s.environment, storeId: s.storeId || "",
       oauth: !!s.oauth, storeName: s.storeName || "", storeAddress: s.storeAddress || "", linkedVia: s.linkedVia || "",
       integrationEnabled: s.integrationEnabled ?? null, deprovisioned: !!s.deprovisioned,
     });
   } catch {
     uber.loaded = false;
-  }
-}
-
-async function linkUber() {
-  uber.busy = true;
-  uber.error = "";
-  try {
-    const s = await apiService.uberLink(uber.storeInput);
-    uber.storeId = s.storeId;
-    uber.storeName = s.storeName || "";
-    message.value = s.storeName ? `Tienda «${s.storeName}» verificada con Uber Eats y vinculada.` : "Tienda de Uber Eats vinculada.";
-    messageIsError.value = false;
-  } catch (e) {
-    uber.error = e.response?.data || "No se pudo vincular la tienda.";
-  } finally {
-    uber.busy = false;
   }
 }
 
@@ -616,7 +591,6 @@ async function unlinkUber() {
   try {
     const r = await apiService.uberUnlink();
     uber.storeId = "";
-    uber.storeInput = "";
     await loadUber();
     // Una tienda que activamos por OAuth sigue mandando pedidos que nadie atendería si Uber no la apagó
     if (r.deactivated === false) {
